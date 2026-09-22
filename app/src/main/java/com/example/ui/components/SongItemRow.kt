@@ -146,6 +146,21 @@ fun SongItemRow(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
 
+                if (song.playCount > 0) {
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Box(
+                        modifier = Modifier
+                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.15f), RoundedCornerShape(4.dp))
+                            .padding(horizontal = 5.dp, vertical = 1.dp)
+                    ) {
+                        Text(
+                            text = "▶ ${song.playCount}",
+                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, fontWeight = FontWeight.Bold),
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
+
                 if (song.musicBrainzScore >= 80) {
                     Spacer(modifier = Modifier.width(6.dp))
                     Box(

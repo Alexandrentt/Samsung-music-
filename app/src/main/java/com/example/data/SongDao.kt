@@ -56,4 +56,7 @@ interface SongDao {
 
     @Query("SELECT SUM(fileSizeBytes) FROM songs")
     suspend fun getTotalStorageBytes(): Long?
+
+    @Query("UPDATE songs SET playCount = playCount + 1 WHERE id = :id")
+    suspend fun incrementPlayCount(id: String)
 }

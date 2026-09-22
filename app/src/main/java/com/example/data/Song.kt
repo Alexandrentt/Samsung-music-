@@ -23,5 +23,6 @@ data class Song(
     val bitrate: String = "192 kbps",
     val fileSizeBytes: Long = 0L,
     val lyricsLrc: String? = null,
-    val lrcFilePath: String? = null
+    val lrcFilePath: String? = null,
+    val playCount: Int = 0
 )

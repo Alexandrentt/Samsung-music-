@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
@@ -29,26 +30,34 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Album
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CloudDownload
+import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Repeat
 import androidx.compose.material.icons.filled.RepeatOne
 import androidx.compose.material.icons.filled.Shuffle
+import androidx.compose.material.icons.filled.Sort
+import androidx.compose.material.icons.filled.ViewList
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -78,6 +87,7 @@ import com.example.ui.components.NowPlayingSheet
 import com.example.ui.components.PlaylistsTabContent
 import com.example.ui.components.SamsungTabs
 import com.example.ui.components.SamsungTopAppBar
+import com.example.ui.components.SongGridItem
 import com.example.ui.components.SongItemRow
 import com.example.ui.components.SoundAliveDialog
 import com.example.ui.components.StatsDialog
@@ -92,6 +102,8 @@ fun SamsungMusicApp(
     val searchQuery by viewModel.searchQuery.collectAsStateWithLifecycle()
     val isSearchActive by viewModel.isSearchActive.collectAsStateWithLifecycle()
     val filteredSongs by viewModel.filteredSongs.collectAsStateWithLifecycle()
+    val songSortOrder by viewModel.songSortOrder.collectAsStateWithLifecycle()
+    val songViewMode by viewModel.songViewMode.collectAsStateWithLifecycle()
     val favoriteSongs by viewModel.favoriteSongs.collectAsStateWithLifecycle()
     val albums by viewModel.albums.collectAsStateWithLifecycle()
     val artists by viewModel.artists.collectAsStateWithLifecycle()
@@ -143,15 +155,28 @@ fun SamsungMusicApp(
                     .fillMaxWidth()
                     .navigationBarsPadding()
             ) {
-                if (currentSong != null) {
+                val displaySong = currentSong ?: filteredSongs.firstOrNull()
+                if (displaySong != null) {
                     MiniPlayerBar(
-                        currentSong = currentSong,
-                        isPlaying = isPlaying,
-                        currentPositionMs = currentPositionMs,
-                        durationMs = durationMs,
-                        onTogglePlayPause = { viewModel.playerManager.togglePlayPause() },
+                        currentSong = displaySong,
+                        isPlaying = isPlaying && currentSong != null,
+                        currentPositionMs = if (currentSong != null) currentPositionMs else 0L,
+                        durationMs = if (currentSong != null) durationMs else displaySong.durationMs,
+                        onTogglePlayPause = {
+                            if (currentSong == null) {
+                                viewModel.playSong(displaySong, filteredSongs)
+                            } else {
+                                viewModel.playerManager.togglePlayPause()
+                            }
+                        },
                         onSkipNext = { viewModel.playerManager.skipToNext() },
-                        onOpenFullPlayer = { viewModel.openNowPlayingSheet() }
+                        onSkipPrevious = { viewModel.playerManager.skipToPrevious() },
+                        onOpenFullPlayer = {
+                            if (currentSong == null) {
+                                viewModel.playSong(displaySong, filteredSongs)
+                            }
+                            viewModel.openNowPlayingSheet()
+                        }
                     )
                 }
             }
@@ -180,6 +205,10 @@ fun SamsungMusicApp(
                             songs = filteredSongs,
                             currentSong = currentSong,
                             isPlaying = isPlaying,
+                            sortOrder = songSortOrder,
+                            onSortOrderChange = { viewModel.setSongSortOrder(it) },
+                            viewMode = songViewMode,
+                            onToggleViewMode = { viewModel.toggleSongViewMode() },
                             onPlaySong = { song -> viewModel.playSong(song, filteredSongs) },
                             onPlayAll = {
                                 if (filteredSongs.isNotEmpty()) {
@@ -245,6 +274,10 @@ fun SamsungMusicApp(
                             songs = favoriteSongs,
                             currentSong = currentSong,
                             isPlaying = isPlaying,
+                            sortOrder = songSortOrder,
+                            onSortOrderChange = { viewModel.setSongSortOrder(it) },
+                            viewMode = songViewMode,
+                            onToggleViewMode = { viewModel.toggleSongViewMode() },
                             onPlaySong = { song -> viewModel.playSong(song, favoriteSongs) },
                             onPlayAll = {
                                 if (favoriteSongs.isNotEmpty()) {
@@ -423,6 +456,10 @@ private fun SongsTabContent(
     songs: List<Song>,
     currentSong: Song?,
     isPlaying: Boolean,
+    sortOrder: SongSortOrder = SongSortOrder.ALPHABETICAL,
+    onSortOrderChange: (SongSortOrder) -> Unit = {},
+    viewMode: SongViewMode = SongViewMode.LIST,
+    onToggleViewMode: () -> Unit = {},
     onPlaySong: (Song) -> Unit,
     onPlayAll: () -> Unit,
     onShuffleAll: () -> Unit,
@@ -436,6 +473,8 @@ private fun SongsTabContent(
     onToggleLoopAll: (() -> Unit)? = null,
     repeatMode: RepeatMode = RepeatMode.OFF
 ) {
+    var sortMenuExpanded by remember { mutableStateOf(false) }
+
     if (songs.isEmpty()) {
         Column(
             modifier = Modifier
@@ -483,79 +522,201 @@ private fun SongsTabContent(
             }
         }
     } else {
-        LazyColumn(
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(bottom = 80.dp)
-        ) {
+        Column(modifier = Modifier.fillMaxSize()) {
             // Quick play header row (Reproducir, Aleatorio, Bucle)
-            item {
-                Row(
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Button(
+                    onClick = onPlayAll,
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                        .weight(1f)
+                        .height(42.dp),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
                 ) {
-                    Button(
-                        onClick = onPlayAll,
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(42.dp),
-                        shape = RoundedCornerShape(12.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
-                    ) {
-                        Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("Reproducir", fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                    }
+                    Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Reproducir", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                }
 
-                    OutlinedButton(
-                        onClick = onShuffleAll,
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(42.dp),
-                        shape = RoundedCornerShape(12.dp)
-                    ) {
-                        Icon(Icons.Default.Shuffle, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("Aleatorio", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
-                    }
+                OutlinedButton(
+                    onClick = onShuffleAll,
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(42.dp),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Icon(Icons.Default.Shuffle, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Aleatorio", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                }
 
-                    if (onToggleLoopAll != null) {
-                        FilledTonalIconButton(
-                            onClick = onToggleLoopAll,
-                            modifier = Modifier
-                                .size(42.dp)
-                                .clip(RoundedCornerShape(12.dp))
-                                .testTag("btn_loop_all"),
-                            colors = IconButtonDefaults.filledTonalIconButtonColors(
-                                containerColor = if (repeatMode != RepeatMode.OFF) MaterialTheme.colorScheme.primary.copy(alpha = 0.18f) else MaterialTheme.colorScheme.surfaceVariant
-                            )
-                        ) {
-                            Icon(
-                                imageVector = if (repeatMode == RepeatMode.ONE) Icons.Default.RepeatOne else Icons.Default.Repeat,
-                                contentDescription = "Modo bucle",
-                                tint = if (repeatMode != RepeatMode.OFF) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.size(20.dp)
-                            )
-                        }
+                if (onToggleLoopAll != null) {
+                    FilledTonalIconButton(
+                        onClick = onToggleLoopAll,
+                        modifier = Modifier
+                            .size(42.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .testTag("btn_loop_all"),
+                        colors = IconButtonDefaults.filledTonalIconButtonColors(
+                            containerColor = if (repeatMode != RepeatMode.OFF) MaterialTheme.colorScheme.primary.copy(alpha = 0.18f) else MaterialTheme.colorScheme.surfaceVariant
+                        )
+                    ) {
+                        Icon(
+                            imageVector = if (repeatMode == RepeatMode.ONE) Icons.Default.RepeatOne else Icons.Default.Repeat,
+                            contentDescription = "Modo bucle",
+                            tint = if (repeatMode != RepeatMode.OFF) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(20.dp)
+                        )
                     }
                 }
             }
 
-            items(songs, key = { it.id }) { song ->
-                SongItemRow(
-                    song = song,
-                    isPlaying = isPlaying,
-                    isCurrent = currentSong?.id == song.id,
-                    onClick = { onPlaySong(song) },
-                    onToggleFavorite = { onToggleFavorite(song) },
-                    onDelete = { onDeleteSong(song) },
-                    onAddToPlaylist = { onAddToPlaylist?.invoke(song) },
-                    onPlayNext = if (onPlayNext != null) { { onPlayNext(song) } } else null,
-                    onPlayShuffle = if (onPlayShuffle != null) { { onPlayShuffle(song) } } else null,
-                    onPlayLoop = if (onPlayLoop != null) { { onPlayLoop(song) } } else null
-                )
+            // Toolbar: Sort order & Grid/List view mode toggle
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box {
+                    Surface(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable { sortMenuExpanded = true }
+                            .testTag("btn_sort_order"),
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Sort,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = sortOrder.title,
+                                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                    }
+
+                    DropdownMenu(
+                        expanded = sortMenuExpanded,
+                        onDismissRequest = { sortMenuExpanded = false }
+                    ) {
+                        SongSortOrder.values().forEach { order ->
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        text = order.title,
+                                        fontWeight = if (order == sortOrder) FontWeight.Bold else FontWeight.Normal,
+                                        color = if (order == sortOrder) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                                    )
+                                },
+                                leadingIcon = {
+                                    if (order == sortOrder) {
+                                        Icon(
+                                            imageVector = Icons.Default.Check,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    }
+                                },
+                                onClick = {
+                                    sortMenuExpanded = false
+                                    onSortOrderChange(order)
+                                }
+                            )
+                        }
+                    }
+                }
+
+                Row(
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "${songs.size} pistas",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    Spacer(modifier = Modifier.width(6.dp))
+
+                    IconButton(
+                        onClick = onToggleViewMode,
+                        modifier = Modifier
+                            .size(36.dp)
+                            .testTag("toggle_view_mode")
+                    ) {
+                        Icon(
+                            imageVector = if (viewMode == SongViewMode.LIST) Icons.Default.GridView else Icons.Default.ViewList,
+                            contentDescription = if (viewMode == SongViewMode.LIST) "Ver en cuadrícula" else "Ver en lista",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(4.dp))
+
+            // Display songs in List or Grid mode
+            if (viewMode == SongViewMode.LIST) {
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(bottom = 80.dp)
+                ) {
+                    items(songs, key = { it.id }) { song ->
+                        SongItemRow(
+                            song = song,
+                            isPlaying = isPlaying,
+                            isCurrent = currentSong?.id == song.id,
+                            onClick = { onPlaySong(song) },
+                            onToggleFavorite = { onToggleFavorite(song) },
+                            onDelete = { onDeleteSong(song) },
+                            onAddToPlaylist = { onAddToPlaylist?.invoke(song) },
+                            onPlayNext = if (onPlayNext != null) { { onPlayNext(song) } } else null,
+                            onPlayShuffle = if (onPlayShuffle != null) { { onPlayShuffle(song) } } else null,
+                            onPlayLoop = if (onPlayLoop != null) { { onPlayLoop(song) } } else null
+                        )
+                    }
+                }
+            } else {
+                LazyVerticalGrid(
+                    columns = GridCells.Fixed(2),
+                    modifier = Modifier.fillMaxSize(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 80.dp)
+                ) {
+                    items(songs, key = { it.id }) { song ->
+                        SongGridItem(
+                            song = song,
+                            isPlaying = isPlaying,
+                            isCurrent = currentSong?.id == song.id,
+                            onClick = { onPlaySong(song) },
+                            onToggleFavorite = { onToggleFavorite(song) },
+                            onDelete = { onDeleteSong(song) },
+                            onAddToPlaylist = { onAddToPlaylist?.invoke(song) },
+                            onPlayNext = if (onPlayNext != null) { { onPlayNext(song) } } else null,
+                            onPlayShuffle = if (onPlayShuffle != null) { { onPlayShuffle(song) } } else null,
+                            onPlayLoop = if (onPlayLoop != null) { { onPlayLoop(song) } } else null
+                        )
+                    }
+                }
             }
         }
     }

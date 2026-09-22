@@ -36,6 +36,17 @@ enum class SamsungTab(val title: String) {
     DESCARGAS_YT("Descargas / YouTube")
 }
 
+enum class SongSortOrder(val title: String) {
+    ALPHABETICAL("A-Z (Título)"),
+    RECENTLY_ADDED("Recientemente agregadas"),
+    MOST_PLAYED("Más reproducidas")
+}
+
+enum class SongViewMode {
+    LIST,
+    GRID
+}
+
 data class AlbumItem(
     val name: String,
     val artist: String,
@@ -89,6 +100,24 @@ class SamsungMusicViewModel(application: Application) : AndroidViewModel(applica
     private val _songToAddToPlaylist = MutableStateFlow<Song?>(null)
     val songToAddToPlaylist: StateFlow<Song?> = _songToAddToPlaylist.asStateFlow()
 
+    private val _songSortOrder = MutableStateFlow(SongSortOrder.ALPHABETICAL)
+    val songSortOrder: StateFlow<SongSortOrder> = _songSortOrder.asStateFlow()
+
+    private val _songViewMode = MutableStateFlow(SongViewMode.LIST)
+    val songViewMode: StateFlow<SongViewMode> = _songViewMode.asStateFlow()
+
+    fun setSongSortOrder(order: SongSortOrder) {
+        _songSortOrder.value = order
+    }
+
+    fun toggleSongViewMode() {
+        _songViewMode.value = if (_songViewMode.value == SongViewMode.LIST) SongViewMode.GRID else SongViewMode.LIST
+    }
+
+    fun setSongViewMode(mode: SongViewMode) {
+        _songViewMode.value = mode
+    }
+
     val rawSongs: StateFlow<List<Song>> = repository.allSongs.stateIn(
         viewModelScope,
         SharingStarted.WhileSubscribed(5000),
@@ -121,13 +150,20 @@ class SamsungMusicViewModel(application: Application) : AndroidViewModel(applica
             emptyList()
         )
 
-    // Filtered songs based on search
-    val filteredSongs: StateFlow<List<Song>> = combine(rawSongs, searchQuery) { songs, query ->
-        if (query.isBlank()) songs
+    // Filtered and sorted songs based on search and sort order
+    val filteredSongs: StateFlow<List<Song>> = combine(rawSongs, searchQuery, _songSortOrder) { songs, query, sortOrder ->
+        val filtered = if (query.isBlank()) songs
         else songs.filter {
             it.title.contains(query, ignoreCase = true) ||
                     it.artist.contains(query, ignoreCase = true) ||
                     it.album.contains(query, ignoreCase = true)
+        }
+        when (sortOrder) {
+            SongSortOrder.ALPHABETICAL -> filtered.sortedBy { it.title.lowercase() }
+            SongSortOrder.RECENTLY_ADDED -> filtered.sortedByDescending { it.downloadedAt }
+            SongSortOrder.MOST_PLAYED -> filtered.sortedWith(
+                compareByDescending<Song> { it.playCount }.thenBy { it.title.lowercase() }
+            )
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
@@ -155,6 +191,12 @@ class SamsungMusicViewModel(application: Application) : AndroidViewModel(applica
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     init {
+        playerManager.onHalfPlayedCallback = { songId ->
+            viewModelScope.launch(Dispatchers.IO) {
+                repository.incrementPlayCount(songId)
+            }
+        }
+
         viewModelScope.launch {
             // Seed starter music if empty
             if (db.songDao().getSongCount() == 0) {
@@ -231,7 +273,8 @@ class SamsungMusicViewModel(application: Application) : AndroidViewModel(applica
                 musicBrainzScore = 98,
                 bitrate = "320 kbps",
                 fileSizeBytes = 5200000L,
-                lyricsLrc = horizonLrc
+                lyricsLrc = horizonLrc,
+                playCount = 19
             ),
             Song(
                 id = "s_despacito",
@@ -247,7 +290,8 @@ class SamsungMusicViewModel(application: Application) : AndroidViewModel(applica
                 musicBrainzScore = 96,
                 bitrate = "192 kbps",
                 fileSizeBytes = 4300000L,
-                lyricsLrc = despacitoLrc
+                lyricsLrc = despacitoLrc,
+                playCount = 14
             ),
             Song(
                 id = "s_counting_stars",
@@ -263,7 +307,8 @@ class SamsungMusicViewModel(application: Application) : AndroidViewModel(applica
                 musicBrainzScore = 95,
                 bitrate = "192 kbps",
                 fileSizeBytes = 4900000L,
-                lyricsLrc = countingStarsLrc
+                lyricsLrc = countingStarsLrc,
+                playCount = 8
             ),
             Song(
                 id = "s_bohemian_rhapsody",
@@ -279,7 +324,8 @@ class SamsungMusicViewModel(application: Application) : AndroidViewModel(applica
                 musicBrainzScore = 99,
                 bitrate = "320 kbps",
                 fileSizeBytes = 7200000L,
-                lyricsLrc = "[00:00.00] Is this the real life? Is this just fantasy?\n[00:08.00] Caught in a landslide, no escape from reality\n[00:16.00] Open your eyes, look up to the skies and see\n[00:26.00] I'm just a poor boy, I need no sympathy\n[00:32.00] Because I'm easy come, easy go, little high, little low\n[00:41.00] Any way the wind blows doesn't really matter to me, to me"
+                lyricsLrc = "[00:00.00] Is this the real life? Is this just fantasy?\n[00:08.00] Caught in a landslide, no escape from reality\n[00:16.00] Open your eyes, look up to the skies and see\n[00:26.00] I'm just a poor boy, I need no sympathy\n[00:32.00] Because I'm easy come, easy go, little high, little low\n[00:41.00] Any way the wind blows doesn't really matter to me, to me",
+                playCount = 25
             ),
             Song(
                 id = "s_uptown_funk",
@@ -295,7 +341,8 @@ class SamsungMusicViewModel(application: Application) : AndroidViewModel(applica
                 musicBrainzScore = 94,
                 bitrate = "192 kbps",
                 fileSizeBytes = 5100000L,
-                lyricsLrc = "[00:00.00] Doh, doh-doh-doh, doh-doh-doh, doh-doh\n[00:06.00] This hit, that ice cold, Michelle Pfeiffer, that white gold\n[00:12.00] This one for them hood girls, them good girls straight masterpieces\n[00:18.00] Stylin', wilin', livin' it up in the city\n[00:23.00] Got Chucks on with Saint Laurent, gotta kiss myself, I'm so pretty\n[00:28.00] I'm too hot (hot damn)\n[00:31.00] Called a police and a fireman\n[00:33.00] I'm too hot (hot damn)"
+                lyricsLrc = "[00:00.00] Doh, doh-doh-doh, doh-doh-doh, doh-doh\n[00:06.00] This hit, that ice cold, Michelle Pfeiffer, that white gold\n[00:12.00] This one for them hood girls, them good girls straight masterpieces\n[00:18.00] Stylin', wilin', livin' it up in the city\n[00:23.00] Got Chucks on with Saint Laurent, gotta kiss myself, I'm so pretty\n[00:28.00] I'm too hot (hot damn)\n[00:31.00] Called a police and a fireman\n[00:33.00] I'm too hot (hot damn)",
+                playCount = 6
             )
         )
         repository.insertSongs(initialTracks)

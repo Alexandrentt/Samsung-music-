@@ -95,6 +95,7 @@ class MusicRepository(
         }
     }
     suspend fun setFavorite(songId: String, isFavorite: Boolean) = songDao.setFavorite(songId, isFavorite)
+    suspend fun incrementPlayCount(songId: String) = songDao.incrementPlayCount(songId)
 
     suspend fun updateMetadata(
         id: String,

@@ -92,6 +92,7 @@ class MusicPlaybackService : Service() {
                 val isPlaying = intent.getBooleanExtra(EXTRA_IS_PLAYING, true)
                 val artUrl = intent.getStringExtra(EXTRA_ART_URL)
                 updateNotification(title, artist, isPlaying, artUrl)
+                com.example.widget.MusicAppWidgetProvider.updateAllWidgets(this, title, artist, isPlaying)
             }
             ACTION_TOGGLE, ACTION_PLAY, ACTION_PAUSE -> {
                 AudioPlayerManager.instance?.togglePlayPause()
@@ -104,6 +105,7 @@ class MusicPlaybackService : Service() {
             }
             ACTION_STOP -> {
                 AudioPlayerManager.instance?.pause()
+                com.example.widget.MusicAppWidgetProvider.updateAllWidgets(this, "Samsung Music", "En pausa", false)
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
             }

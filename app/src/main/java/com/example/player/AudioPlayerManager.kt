@@ -65,8 +65,11 @@ class AudioPlayerManager(private val context: Context) {
 
     private var isSimulatedPlayback = false
     private var nextPrioritySongId: String? = null
+    private var hasCountedHalfPlay = false
+    var onHalfPlayedCallback: ((String) -> Unit)? = null
 
     fun playSong(song: Song, newQueue: List<Song> = emptyList()) {
+        hasCountedHalfPlay = false
         if (newQueue.isNotEmpty()) {
             _queue.value = newQueue
         } else if (!_queue.value.any { it.id == song.id }) {
@@ -432,6 +435,16 @@ class AudioPlayerManager(private val context: Context) {
                         _currentPositionMs.value = current
                         updateActiveLyric(current)
                     } catch (_: Exception) {}
+                }
+
+                // Incrementar contador si se reproduce más de la mitad de la canción
+                val currentPos = _currentPositionMs.value
+                val totalDur = _durationMs.value
+                if (!hasCountedHalfPlay && totalDur > 1000L && currentPos >= (totalDur / 2)) {
+                    hasCountedHalfPlay = true
+                    _currentSong.value?.let { current ->
+                        onHalfPlayedCallback?.invoke(current.id)
+                    }
                 }
             }
         }

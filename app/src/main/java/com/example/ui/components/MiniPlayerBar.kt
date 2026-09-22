@@ -19,6 +19,7 @@ import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.QueueMusic
 import androidx.compose.material.icons.filled.SkipNext
+import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
@@ -48,6 +49,7 @@ fun MiniPlayerBar(
     durationMs: Long,
     onTogglePlayPause: () -> Unit,
     onSkipNext: () -> Unit,
+    onSkipPrevious: () -> Unit = {},
     onOpenFullPlayer: () -> Unit
 ) {
     if (currentSong == null) return
@@ -133,6 +135,23 @@ fun MiniPlayerBar(
                     )
                 }
 
+                // Skip Previous Button
+                IconButton(
+                    onClick = onSkipPrevious,
+                    modifier = Modifier
+                        .size(38.dp)
+                        .testTag("mini_player_skip_prev")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.SkipPrevious,
+                        contentDescription = "Anterior",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
+
+                Spacer(modifier = Modifier.width(4.dp))
+
                 // Play / Pause Icon Button
                 IconButton(
                     onClick = onTogglePlayPause,
@@ -150,7 +169,7 @@ fun MiniPlayerBar(
                     )
                 }
 
-                Spacer(modifier = Modifier.width(6.dp))
+                Spacer(modifier = Modifier.width(4.dp))
 
                 // Skip Next Button
                 IconButton(
