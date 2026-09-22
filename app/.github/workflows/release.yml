@@ -1,0 +1,67 @@
+name: Build & Release APK
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build Android APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'gradle'
+
+      - name: Grant execute permission for gradlew (if present)
+        run: chmod +x ./gradlew || true
+
+      - name: Build Debug APK with Gradle
+        run: |
+          if [ -f "./gradlew" ]; then
+            ./gradlew :app:assembleDebug --stacktrace
+          else
+            gradle :app:assembleDebug --stacktrace
+          fi
+
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: samsung-music-apk
+          path: app/build/outputs/apk/debug/*.apk
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: app/build/outputs/apk/debug/*.apk
+          name: Release ${{ github.ref_name }}
+          body: |
+            ## 🎵 Samsung Music Clone - Release ${{ github.ref_name }}
+            
+            ### Novedades:
+            - Interfaz fiel One UI (Samsung Music) con modo claro/oscuro y paleta azul moderna.
+            - Reproductor de audio con soporte en segundo plano (MediaSession / Foreground Service).
+            - Letras sincronizadas en tiempo real (.lrc) con salto interactivo.
+            - Ecualizador SoundAlive interactivo con curvas de respuesta y presets One UI.
+            - Gestor de descargas de YouTube (vídeos y listas de reproducción completas).
+            - Integración con base de datos local Room para listas de reproducción personalizadas con operaciones CRUD completas.
+            
+            ### Instalación:
+            1. Descarga el archivo `.apk` adjunto.
+            2. Abre el archivo en tu dispositivo Android y permite la instalación de fuentes desconocidas si es necesario.
+            3. ¡Disfruta de tu música favorita!
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

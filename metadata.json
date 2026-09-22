@@ -1,0 +1,6 @@
+{
+  "name": "Samsung Music",
+  "description": "Reproductor Samsung Music con interfaz One UI y gestor de descargas de YouTube con enriquecimiento de metadatos MusicBrainz.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
