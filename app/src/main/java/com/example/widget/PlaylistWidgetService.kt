@@ -16,6 +16,11 @@ import com.example.data.Song
  */
 class PlaylistWidgetService : RemoteViewsService() {
 
+    companion object {
+        const val ACTION_PLAY_ALL = "com.example.widget.action.PLAY_ALL"
+        const val ACTION_PLAY_SONG = "com.example.widget.action.PLAY_SONG"
+    }
+
     override fun onGetViewFactory(intent: Intent): RemoteViewsFactory {
         val widgetId = intent.getIntExtra(
             AppWidgetManager.EXTRA_APPWIDGET_ID,
