@@ -3,6 +3,7 @@ name: Build Android APK
 on:
   push:
     branches: [ main, master ]
+  pull_request:
   workflow_dispatch:
 
 permissions:
@@ -33,13 +34,16 @@ jobs:
       - name: Build debug APK
         run: gradle :app:assembleDebug --no-daemon
 
+      # Los pasos de publicación solo corren en main (los PR solo validan el build).
       - name: Copy APK to repository root
+        if: github.ref == 'refs/heads/main'
         run: |
           mkdir -p apk
           cp app/build/outputs/apk/debug/app-debug.apk samsung-music.apk
           ls -la samsung-music.apk
 
       - name: Commit APK to repository root
+        if: github.ref == 'refs/heads/main'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -52,6 +56,7 @@ jobs:
           fi
 
       - name: Delete in-progress release (if rerun)
+        if: github.ref == 'refs/heads/main'
         run: |
           VERSION="v$(date +'%Y.%m.%d')"
           gh release delete "$VERSION" --yes --cleanup-tag 2>/dev/null || true
@@ -59,6 +64,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Publish APK to GitHub Releases
+        if: github.ref == 'refs/heads/main'
         run: |
           VERSION="v$(date +'%Y.%m.%d')"
           gh release create "$VERSION" samsung-music.apk \
