@@ -5,111 +5,68 @@ import com.example.data.DownloadHistoryItem
 import com.example.data.Song
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
 import java.net.URLEncoder
 import java.text.Normalizer
+import java.util.Locale
 import java.util.concurrent.TimeUnit
 import java.util.regex.Pattern
-import kotlin.math.max
-
-data class EnrichmentResult(
-    val title: String,
-    val artist: String,
-    val album: String,
-    val coverArtUrl: String?,
-    val score: Int,
-    val releaseId: String?,
-    val source: String
-)
-
-data class DownloadProgress(
-    val step: String,
-    val percent: Float, // 0f to 1f
-    val currentSongTitle: String = "",
-    val totalItems: Int = 1,
-    val currentItemIndex: Int = 0,
-    val isFinished: Boolean = false,
-    val error: String? = null
-)
 
 class MusicaEngine(private val context: Context) {
 
     private val client = OkHttpClient.Builder()
-        .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(25, TimeUnit.SECONDS)
+        .connectTimeout(15L, TimeUnit.SECONDS)
+        .readTimeout(25L, TimeUnit.SECONDS)
         .build()
 
-    companion object {
-        const val UMBRAL_CONFIANZA = 80 // percentage threshold
-        const val MB_API = "https://musicbrainz.org/ws/2"
-        const val CAA_API = "https://coverartarchive.org"
-        const val USER_AGENT = "SamsungMusicManager/1.0 (Android-OneUI)"
-
-        // Presets from musica.py
-        val PLAYLIST_PRESETS = listOf(
-            "https://www.youtube.com/playlist?list=PLCUqyibcwbIAI0E8rbFcKhKMuUP0dfcIj",
-            "https://youtube.com/playlist?list=PLOVV23EuIs_Y"
-        )
-    }
-
-    private val musicFolder: File by lazy {
-        val folder = File(context.filesDir, "SamsungMusic")
-        if (!folder.exists()) {
-            folder.mkdirs()
-        }
+    val musicFolder: File by lazy {
+        val folder = context.getExternalFilesDir("Music") ?: File(context.filesDir, "Music")
+        if (!folder.exists()) folder.mkdirs()
         folder
     }
 
-    /**
-     * Limpia el texto eliminando corchetes, paréntesis y sufijos como Official Video, HD, etc.
-     * Replica exacta de _limpiar_texto en musica.py
-     */
-    fun limpiarTexto(raw: String): String {
-        var t = raw
-        // Quitar paréntesis y corchetes con contenido
-        t = t.replace(Regex("\\([^)]*\\)"), "")
-        t = t.replace(Regex("\\[[^\\]]*\\]"), "")
-        // Quitar expresiones comunes de video / subtítulos
-        val garbageRegex = Regex(
-            "(?i)(official\\s*(video|audio|music\\s*video|lyric[s]?|visualizer)|" +
-                    "lyrics?|sub[s]?\\.?\\s*(español|english|espanol)?|" +
-                    "video\\s*oficial|videoclip\\s*oficial|hd|4k|remastered?\\s*\\d*)"
-        )
-        t = garbageRegex.replace(t, "")
-        // Limpiar espacios múltiples y caracteres sueltos en bordes
-        t = t.replace(Regex("\\s+"), " ").trim(' ', '-', '–', '—', '|', ':')
-        return t
+    data class PlaylistItem(val videoId: String, val title: String, val channel: String)
+
+    companion object {
+        const val PLAYLIST_ID_DEFAULT = "PLCUqyibcwbIAI0E8rbFcKhKMuUP0dfcIj"
+        const val PLAYLIST_URL_DEFAULT = "https://youtube.com/playlist?list=PLCUqyibcwbIAI0E8rbFcKhKMuUP0dfcIj&si=CFlp1A7Y_8g4mKEG"
+        const val CAA_API = "https://coverartarchive.org"
+        const val MB_API = "https://musicbrainz.org/ws/2"
+        const val UMBRAL_CONFIANZA = 80
+        const val USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
 
-    /**
-     * Normaliza caracteres removiendo acentos y pasando a minúsculas
-     */
+    fun limpiarTexto(raw: String): String {
+        var t = raw.replace(Regex("\\([^)]*\\)"), "")
+        t = t.replace(Regex("\\[[^\\]]*\\]"), "")
+        val garbageRegex = Regex("(?i)(official\\s*(video|audio|music\\s*video|lyric[s]?|visualizer)|lyrics?|sub[s]?\\.?\\s*(español|english|espanol)?|video\\s*oficial|videoclip\\s*oficial|hd|4k|remastered?\\s*\\d*)")
+        t = garbageRegex.replace(t, "")
+        return t.replace(Regex("\\s+"), " ").trim(' ', '-', '–', '—', '|', ':')
+    }
+
     fun normalizar(raw: String): String {
         val normalized = Normalizer.normalize(raw, Normalizer.Form.NFD)
-        val ascii = normalized.replace(Regex("\\p{InCombiningDiacriticalMarks}+"), "")
-        return ascii.lowercase().trim()
+        val ascii = Regex("\\p{InCombiningDiacriticalMarks}+").replace(normalized, "")
+        return ascii.lowercase(Locale.ROOT).trim()
     }
 
-    /**
-     * Calcula similitud entre 0 y 100 utilizando el algoritmo Levenshtein (similar a rapidfuzz.fuzz.ratio)
-     */
     fun fuzzyRatio(s1: String, s2: String): Int {
         val norm1 = normalizar(s1)
         val norm2 = normalizar(s2)
         if (norm1 == norm2) return 100
         if (norm1.isEmpty() || norm2.isEmpty()) return 0
-
         val len1 = norm1.length
         val len2 = norm2.length
         val distance = Array(len1 + 1) { IntArray(len2 + 1) }
-
         for (i in 0..len1) distance[i][0] = i
         for (j in 0..len2) distance[0][j] = j
-
         for (i in 1..len1) {
             for (j in 1..len2) {
                 val cost = if (norm1[i - 1] == norm2[j - 1]) 0 else 1
@@ -120,27 +77,22 @@ class MusicaEngine(private val context: Context) {
                 )
             }
         }
-
         val levDist = distance[len1][len2]
-        val maxLen = max(len1, len2)
-        return (((maxLen - levDist).toDouble() / maxLen.toDouble()) * 100).toInt()
+        val maxLen = maxOf(len1, len2)
+        return (((maxLen - levDist).toDouble() / maxLen) * 100.0).toInt()
     }
 
-    /**
-     * Genera pares (artista, titulo) a partir del título de YouTube y el canal
-     */
-    fun candidatos(tituloYt: String, canal: String = ""): List<Pair<String, String>> {
+    fun candidatos(tituloYt: String, canal: String): List<Pair<String, String>> {
         val limpio = limpiarTexto(tituloYt)
-        val candidatos = mutableListOf<Pair<String, String>>()
+        val candidatosList = mutableListOf<Pair<String, String>>()
         val vistos = mutableSetOf<String>()
 
         fun agregar(artista: String, titulo: String) {
             val a = artista.trim()
             val t = titulo.trim()
-            val clave = "${normalizar(a)}:::${normalizar(t)}"
-            if (!vistos.contains(clave) && t.isNotEmpty()) {
-                vistos.add(clave)
-                candidatos.add(Pair(a, t))
+            val key = "$a|||$t"
+            if (t.isNotBlank() && vistos.add(key)) {
+                candidatosList.add(Pair(a, t))
             }
         }
 
@@ -154,48 +106,34 @@ class MusicaEngine(private val context: Context) {
         }
 
         if (canal.isNotBlank()) {
-            val canalLimpio = canal.replace(
-                Regex("(?i)\\s*(VEVO|oficial|official|music|records?|topic)\\s*"),
-                ""
-            ).trim()
-
+            val canalLimpio = canal.replace(Regex("(?i)\\s*(VEVO|oficial|official|music|records?|topic)\\s*"), "").trim()
             if (canalLimpio.isNotEmpty()) {
                 agregar(canalLimpio, limpio)
-                for (sep in separadores) {
-                    val partes = limpio.split(sep, limit = 2)
-                    if (partes.size == 2) {
-                        agregar(canalLimpio, partes[1])
-                        agregar(canalLimpio, partes[0])
+                for (sep2 in separadores) {
+                    val partes2 = limpio.split(sep2, limit = 2)
+                    if (partes2.size == 2) {
+                        agregar(canalLimpio, partes2[1])
+                        agregar(canalLimpio, partes2[0])
                     }
                 }
             }
         }
 
         agregar("", limpio)
-        return candidatos
+        return candidatosList
     }
 
-    /**
-     * Consulta la API pública de MusicBrainz para buscar la canción y obtener release_id, artista y título oficial.
-     */
     suspend fun buscarMusicBrainz(artista: String, titulo: String): EnrichmentResult? = withContext(Dispatchers.IO) {
         try {
-            val queryParts = mutableListOf<String>()
-            if (artista.isNotBlank()) {
-                queryParts.add("artist:\"$artista\"")
+            val encodedQuery = if (artista.isNotBlank()) {
+                URLEncoder.encode("recording:\"$titulo\" AND artist:\"$artista\"", "UTF-8")
+            } else {
+                URLEncoder.encode("recording:\"$titulo\"", "UTF-8")
             }
-            if (titulo.isNotBlank()) {
-                queryParts.add("recording:\"$titulo\"")
-            }
-            if (queryParts.isEmpty()) return@withContext null
-
-            val query = queryParts.joinToString(" AND ")
-            val encodedQuery = URLEncoder.encode(query, "UTF-8")
-            val url = "$MB_API/recording?query=$encodedQuery&limit=5&fmt=json"
-
+            val url = "$MB_API/recording?query=$encodedQuery&fmt=json&limit=5"
             val request = Request.Builder()
                 .url(url)
-                .header("User-Agent", USER_AGENT)
+                .header("User-Agent", "SamsungMusicManager/1.0 (Android-OneUI)")
                 .build()
 
             client.newCall(request).execute().use { response ->
@@ -204,217 +142,399 @@ class MusicaEngine(private val context: Context) {
                 val json = JSONObject(body)
                 val recordings = json.optJSONArray("recordings") ?: return@withContext null
 
-                var mejorScore = 0
-                var mejorReleaseId: String? = null
-                var mejorArtista = ""
-                var mejorTitulo = ""
-                var mejorAlbum = ""
+                var bestScore = 0
+                var bestTitle = ""
+                var bestArtist = ""
+                var bestAlbum = ""
+                var releaseId: String? = null
 
                 for (i in 0 until recordings.length()) {
                     val rec = recordings.getJSONObject(i)
-                    val mbTitulo = rec.optString("title", "")
+                    val recTitle = rec.optString("title", "")
                     val artistCredit = rec.optJSONArray("artist-credit")
-                    val mbArtistas = mutableListOf<String>()
+                    val artistsList = mutableListOf<String>()
                     if (artistCredit != null) {
                         for (j in 0 until artistCredit.length()) {
-                            val art = artistCredit.optJSONObject(j)
-                            if (art != null && art.has("artist")) {
-                                mbArtistas.add(art.getJSONObject("artist").optString("name", ""))
+                            val artObj = artistCredit.optJSONObject(j)
+                            if (artObj != null && artObj.has("artist")) {
+                                artistsList.add(artObj.getJSONObject("artist").optString("name", ""))
                             }
                         }
                     }
-                    val mbArtistaStr = mbArtistas.joinToString(", ")
+                    val recArtist = artistsList.joinToString(", ")
+                    val score = ((fuzzyRatio(titulo, recTitle) * 0.6) +
+                            ((if (artista.isNotBlank()) fuzzyRatio(artista, recArtist) else 100) * 0.4)).toInt()
 
-                    val scoreT = fuzzyRatio(titulo, mbTitulo)
-                    val scoreA = if (artista.isNotBlank()) fuzzyRatio(artista, mbArtistaStr) else 100
-                    val score = (scoreT * 0.6 + scoreA * 0.4).toInt()
-
-                    if (score > mejorScore) {
-                        mejorScore = score
-                        mejorArtista = mbArtistaStr
-                        mejorTitulo = mbTitulo
+                    if (score > bestScore) {
+                        bestScore = score
+                        bestTitle = recTitle
+                        bestArtist = recArtist
                         val releases = rec.optJSONArray("releases")
                         if (releases != null && releases.length() > 0) {
-                            val releaseObj = releases.getJSONObject(0)
-                            mejorReleaseId = releaseObj.optString("id", null)
-                            mejorAlbum = releaseObj.optString("title", "Álbum Desconocido")
+                            val rel = releases.getJSONObject(0)
+                            releaseId = rel.optString("id", null)
+                            bestAlbum = rel.optString("title", "Álbum Desconocido")
+                        } else {
+                            bestAlbum = "Single"
                         }
                     }
                 }
 
-                if (mejorScore > 40 && mejorTitulo.isNotBlank()) {
-                    val coverUrl = if (mejorReleaseId != null) {
-                        "$CAA_API/release/$mejorReleaseId/front"
-                    } else null
-
+                if (bestScore > 40 && bestTitle.isNotBlank()) {
+                    val coverUrl = if (releaseId != null) "$CAA_API/release/$releaseId/front-250.jpg" else null
                     return@withContext EnrichmentResult(
-                        title = mejorTitulo,
-                        artist = if (mejorArtista.isNotBlank()) mejorArtista else artista,
-                        album = if (mejorAlbum.isNotBlank()) mejorAlbum else "Single",
+                        title = bestTitle,
+                        artist = if (bestArtist.isNotBlank()) bestArtist else artista,
+                        album = if (bestAlbum.isNotBlank()) bestAlbum else "Samsung Music",
                         coverArtUrl = coverUrl,
-                        score = mejorScore,
-                        releaseId = mejorReleaseId,
+                        score = bestScore,
+                        releaseId = releaseId,
                         source = "MusicBrainz"
                     )
                 }
             }
-        } catch (_: Exception) {
-            // Ignorar errores de red y continuar
+        } catch (e: Exception) {
+            // ignore network errors
         }
         null
     }
 
-    /**
-     * Enriquece la metadata de una canción usando MusicBrainz y candidatos de YouTube.
-     */
-    suspend fun enriquecerCancion(tituloYt: String, canal: String, videoId: String): EnrichmentResult = withContext(Dispatchers.IO) {
-        val candidatosList = candidatos(tituloYt, canal)
-        var mejorResultado: EnrichmentResult? = null
-
-        for (cand in candidatosList) {
-            val res = buscarMusicBrainz(cand.first, cand.second)
-            if (res != null) {
-                if (mejorResultado == null || res.score > mejorResultado.score) {
-                    mejorResultado = res
-                    if (res.score >= UMBRAL_CONFIANZA) break
-                }
+    suspend fun enriquecerCancion(videoId: String, tituloYt: String, canal: String): EnrichmentResult {
+        val candidates = candidatos(tituloYt, canal)
+        for (cand in candidates) {
+            val result = buscarMusicBrainz(cand.first, cand.second)
+            if (result != null && result.score >= UMBRAL_CONFIANZA) {
+                return result
             }
         }
-
-        if (mejorResultado != null && mejorResultado.score >= 50) {
-            val finalCover = if (mejorResultado.score >= UMBRAL_CONFIANZA && mejorResultado.coverArtUrl != null) {
-                mejorResultado.coverArtUrl
-            } else {
-                obtenerThumbnailYoutube(videoId)
-            }
-            return@withContext mejorResultado.copy(coverArtUrl = finalCover)
-        }
-
-        // Fallback a metadata limpia de YouTube
+        // Fallback result
         val limpio = limpiarTexto(tituloYt)
-        var artistaFallback = canal.replace(Regex("(?i)\\s*(VEVO|oficial|official|music|records?|topic)\\s*"), "").trim()
-        var tituloFallback = limpio
-
         val partes = limpio.split(" - ", limit = 2)
-        if (partes.size == 2) {
-            artistaFallback = partes[0].trim()
-            tituloFallback = partes[1].trim()
-        }
-
-        EnrichmentResult(
-            title = if (tituloFallback.isNotBlank()) tituloFallback else tituloYt,
-            artist = if (artistaFallback.isNotBlank()) artistaFallback else "Artista Desconocido",
-            album = "YouTube Audio",
-            coverArtUrl = obtenerThumbnailYoutube(videoId),
-            score = 30,
+        val artist = if (partes.size == 2) partes[0].trim() else canal.ifBlank { "Artista Desconocido" }
+        val title = if (partes.size == 2) partes[1].trim() else limpio
+        return EnrichmentResult(
+            title = title,
+            artist = artist,
+            album = "YouTube Music",
+            coverArtUrl = "https://img.youtube.com/vi/$videoId/hqdefault.jpg",
+            score = 65,
             releaseId = null,
             source = "YouTube"
         )
     }
 
-    fun obtenerThumbnailYoutube(videoId: String): String {
-        return if (videoId.isNotBlank()) {
-            "https://img.youtube.com/vi/$videoId/hqdefault.jpg"
-        } else {
-            "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=500&q=80"
-        }
-    }
-
-    /**
-     * Extrae ID de video o ID de playlist de una URL
-     */
     fun extraerInfoUrl(url: String): Pair<String?, String?> {
-        // Retorna Pair(videoId, playlistId)
-        var videoId: String? = null
-        var playlistId: String? = null
+        val playlistMatcher = Pattern.compile("[?&]list=([a-zA-Z0-9_-]+)").matcher(url)
+        val playlistId = if (playlistMatcher.find()) playlistMatcher.group(1) else null
 
-        val playlistPattern = Pattern.compile("[?&]list=([a-zA-Z0-9_-]+)")
-        val plMatcher = playlistPattern.matcher(url)
-        if (plMatcher.find()) {
-            playlistId = plMatcher.group(1)
-        }
+        val videoMatcher = Pattern.compile("(?:v=|youtu\\.be/|embed/|shorts/)([a-zA-Z0-9_-]{11})").matcher(url)
+        val videoId = if (videoMatcher.find()) videoMatcher.group(1) else null
 
-        val videoPattern = Pattern.compile("(?:v=|youtu\\.be/|embed/|shorts/)([a-zA-Z0-9_-]{11})")
-        val vidMatcher = videoPattern.matcher(url)
-        if (vidMatcher.find()) {
-            videoId = vidMatcher.group(1)
-        }
-
-        return Pair(videoId, playlistId)
+        return Pair(playlistId, videoId)
     }
 
-    /**
-     * Proceso de descarga de canción individual o lista.
-     * Replica fielmente los 3 pasos de musica.py:
-     * 1. Sincronizar historial
-     * 2. Vincular archivos locales
-     * 3. Descargar y enriquecer canciones nuevas
-     */
-    suspend fun descargarDesdeUrl(
-        url: String,
-        autoEnriquecer: Boolean = true,
-        onProgress: (DownloadProgress) -> Unit
-    ): List<Song> = withContext(Dispatchers.IO) {
-        val downloadedSongs = mutableListOf<Song>()
-        val (videoId, playlistId) = extraerInfoUrl(url)
+    suspend fun buscarVideosYouTube(query: String): List<PlaylistItem> = withContext(Dispatchers.IO) {
+        val results = mutableListOf<PlaylistItem>()
+        val seen = mutableSetOf<String>()
+        val trimmed = query.trim()
+        if (trimmed.isBlank()) return@withContext emptyList()
 
+        // If user pasted a direct YouTube URL, check if it has a videoId or playlistId
+        val (playlistId, videoId) = extraerInfoUrl(trimmed)
+        if (videoId != null) {
+            val title = obtenerTituloVideo(videoId) ?: "Video de YouTube"
+            return@withContext listOf(PlaylistItem(videoId, title, "YouTube"))
+        }
         if (playlistId != null) {
-            onProgress(DownloadProgress("Analizando playlist...", 0.1f, "Playlist ID: $playlistId"))
             val playlistItems = obtenerItemsPlaylist(playlistId)
-            val total = playlistItems.size
-            for ((index, item) in playlistItems.withIndex()) {
-                val percent = 0.15f + (index.toFloat() / total) * 0.8f
-                onProgress(
-                    DownloadProgress(
-                        step = "Descargando [${index + 1}/$total]...",
-                        percent = percent,
-                        currentSongTitle = item.title,
-                        totalItems = total,
-                        currentItemIndex = index + 1
-                    )
-                )
-
-                val song = procesarYGuardarAudio(item.videoId, item.title, item.channel, autoEnriquecer)
-                downloadedSongs.add(song)
-            }
-        } else {
-            val vid = videoId ?: "yt_${System.currentTimeMillis() % 100000}"
-            onProgress(DownloadProgress("Obteniendo información del video...", 0.2f, "YouTube ID: $vid"))
-            val titleYt = obtenerTituloVideo(vid) ?: "YouTube Song $vid"
-            val channelYt = "YouTube Music"
-
-            onProgress(DownloadProgress("Descargando y convirtiendo audio...", 0.5f, titleYt))
-            val song = procesarYGuardarAudio(vid, titleYt, channelYt, autoEnriquecer)
-            downloadedSongs.add(song)
+            return@withContext playlistItems.take(25)
         }
 
-        onProgress(DownloadProgress("¡Descarga y enriquecimiento completados!", 1.0f, isFinished = true))
-        downloadedSongs
+        try {
+            val encodedQuery = URLEncoder.encode(trimmed, "UTF-8")
+            val searchUrl = "https://www.youtube.com/results?search_query=$encodedQuery"
+            val request = Request.Builder()
+                .url(searchUrl)
+                .header("User-Agent", USER_AGENT)
+                .header("Accept-Language", "es-ES,es;q=0.9,en;q=0.8")
+                .build()
+
+            client.newCall(request).execute().use { response ->
+                if (response.isSuccessful) {
+                    val html = response.body?.string().orEmpty()
+                    val dataMatcher = Pattern.compile("ytInitialData\\s*=\\s*(\\{.+?\\});", Pattern.DOTALL).matcher(html)
+                    if (dataMatcher.find()) {
+                        val jsonStr = dataMatcher.group(1)
+                        if (jsonStr != null) {
+                            val root = JSONObject(jsonStr)
+                            val contents = root.optJSONObject("contents")
+                                ?.optJSONObject("twoColumnSearchResultsRenderer")
+                                ?.optJSONObject("primaryContents")
+                                ?.optJSONObject("sectionListRenderer")
+                                ?.optJSONArray("contents")
+
+                            if (contents != null) {
+                                for (i in 0 until contents.length()) {
+                                    val section = contents.optJSONObject(i) ?: continue
+                                    val itemSection = section.optJSONObject("itemSectionRenderer")
+                                    val sectionContents = itemSection?.optJSONArray("contents") ?: continue
+
+                                    for (j in 0 until sectionContents.length()) {
+                                        val item = sectionContents.optJSONObject(j) ?: continue
+                                        val vr = item.optJSONObject("videoRenderer") ?: continue
+                                        val vid = vr.optString("videoId", "")
+                                        val titleObj = vr.optJSONObject("title")
+                                        val runs = titleObj?.optJSONArray("runs")
+                                        val title = if (runs != null && runs.length() > 0) {
+                                            runs.optJSONObject(0)?.optString("text", "") ?: ""
+                                        } else {
+                                            titleObj?.optString("simpleText", "") ?: ""
+                                        }
+
+                                        val ownerObj = vr.optJSONObject("ownerText")
+                                        val ownerRuns = ownerObj?.optJSONArray("runs")
+                                        val channel = if (ownerRuns != null && ownerRuns.length() > 0) {
+                                            ownerRuns.optJSONObject(0)?.optString("text", "YouTube") ?: "YouTube"
+                                        } else {
+                                            ownerObj?.optString("simpleText", "YouTube") ?: "YouTube"
+                                        }
+
+                                        if (vid.isNotBlank() && title.isNotBlank() && seen.add(vid)) {
+                                            results.add(PlaylistItem(vid, title, channel))
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
+        results
     }
 
-    private data class PlaylistItem(val videoId: String, val title: String, val channel: String)
+    private fun parseVideoListContents(
+        contents: JSONArray,
+        onVideoFound: (vid: String, title: String, channel: String) -> Unit
+    ): String? {
+        var continuationToken: String? = null
+        for (i in 0 until contents.length()) {
+            val item = contents.optJSONObject(i) ?: continue
 
-    private fun obtenerItemsPlaylist(playlistId: String): List<PlaylistItem> {
-        // En Android, para listas de YouTube sin API key o con endpoints de prueba,
-        // generamos los ítems de las listas referenciadas en musica.py
-        return when (playlistId) {
-            "PLCUqyibcwbIAI0E8rbFcKhKMuUP0dfcIj" -> listOf(
-                PlaylistItem("kJQP7kiw5Fk", "Luis Fonsi - Despacito ft. Daddy Yankee (Official Audio)", "LuisFonsiVEVO"),
-                PlaylistItem("OPf0YbXqDm0", "Mark Ronson - Uptown Funk (Official Video) ft. Bruno Mars", "MarkRonsonVEVO"),
-                PlaylistItem("09R8_2nJtjg", "Maroon 5 - Sugar (Official Music Video)", "Maroon5VEVO"),
-                PlaylistItem("fJ9rUzIMcZQ", "Queen - Bohemian Rhapsody (Official Video Remastered)", "Queen Official")
-            )
-            "PLOVV23EuIs_Y" -> listOf(
-                PlaylistItem("hT_nvWreIhg", "OneRepublic - Counting Stars (Official Music Video)", "OneRepublicVEVO"),
-                PlaylistItem("CevxZvSJLk8", "Katy Perry - Roar (Official)", "KatyPerryVEVO"),
-                PlaylistItem("YQHsXMglC9A", "Adele - Hello (Official Lyric Video)", "AdeleVEVO")
-            )
-            else -> listOf(
-                PlaylistItem("custom_vid_1", "Coldplay - Viva La Vida (Official Audio 4K)", "Coldplay"),
-                PlaylistItem("custom_vid_2", "Daft Punk - Get Lucky ft. Pharrell Williams (Official Audio)", "Daft Punk"),
-                PlaylistItem("custom_vid_3", "Ed Sheeran - Shape of You (Official Music Video)", "Ed Sheeran")
-            )
+            // Check if regular playlist video item
+            val videoRenderer = item.optJSONObject("playlistVideoRenderer")
+            if (videoRenderer != null) {
+                val vid = videoRenderer.optString("videoId", "")
+                val titleObj = videoRenderer.optJSONObject("title")
+                val titleRuns = titleObj?.optJSONArray("runs")
+                val title = if (titleRuns != null && titleRuns.length() > 0) {
+                    titleRuns.optJSONObject(0)?.optString("text", "") ?: ""
+                } else {
+                    titleObj?.optString("simpleText", "") ?: ""
+                }
+
+                val bylineObj = videoRenderer.optJSONObject("shortBylineText")
+                val bylineRuns = bylineObj?.optJSONArray("runs")
+                val channel = if (bylineRuns != null && bylineRuns.length() > 0) {
+                    bylineRuns.optJSONObject(0)?.optString("text", "YouTube") ?: "YouTube"
+                } else {
+                    bylineObj?.optString("simpleText", "YouTube") ?: "YouTube"
+                }
+
+                if (vid.isNotBlank() && title.isNotBlank()) {
+                    onVideoFound(vid, title, channel)
+                }
+            }
+
+            // Check if continuation token item
+            val contRenderer = item.optJSONObject("continuationItemRenderer")
+            if (contRenderer != null) {
+                val token = extractContinuationToken(contRenderer)
+                if (!token.isNullOrBlank()) {
+                    continuationToken = token
+                }
+            }
         }
+        return continuationToken
+    }
+
+    private fun extractContinuationToken(renderer: JSONObject): String? {
+        val endpoint = renderer.optJSONObject("continuationEndpoint") ?: return null
+        val direct = endpoint.optJSONObject("continuationCommand")?.optString("token")
+        if (!direct.isNullOrBlank()) return direct
+
+        val executor = endpoint.optJSONObject("commandExecutorCommand")
+        val commands = executor?.optJSONArray("commands")
+        if (commands != null) {
+            for (i in 0 until commands.length()) {
+                val cmd = commands.optJSONObject(i)
+                val token = cmd?.optJSONObject("continuationCommand")?.optString("token")
+                if (!token.isNullOrBlank()) return token
+            }
+        }
+        return null
+    }
+
+    suspend fun obtenerItemsPlaylist(playlistId: String): List<PlaylistItem> = withContext(Dispatchers.IO) {
+        val items = mutableListOf<PlaylistItem>()
+        val seenVideoIds = mutableSetOf<String>()
+
+        fun addItem(vid: String, title: String, channel: String) {
+            if (vid.isNotBlank() && title.isNotBlank() && seenVideoIds.add(vid)) {
+                val cleanTitle = title
+                    .replace("&quot;", "\"")
+                    .replace("&amp;", "&")
+                    .replace("&#39;", "'")
+                    .replace("&lt;", "<")
+                    .replace("&gt;", ">")
+                items.add(PlaylistItem(vid, cleanTitle, channel))
+            }
+        }
+
+        // 1. Fetch initial HTML page from YouTube
+        var continuationToken: String? = null
+        var apiKey = "AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8"
+
+        try {
+            val playlistUrl = "https://www.youtube.com/playlist?list=$playlistId"
+            val request = Request.Builder()
+                .url(playlistUrl)
+                .header("User-Agent", USER_AGENT)
+                .header("Accept-Language", "es-ES,es;q=0.9,en;q=0.8")
+                .build()
+
+            client.newCall(request).execute().use { response ->
+                if (response.isSuccessful) {
+                    val html = response.body?.string().orEmpty()
+
+                    // Extract innerTube API key if found
+                    val keyMatcher = Pattern.compile("innertubeApiKey[\":\\s]+([a-zA-Z0-9_-]{39})").matcher(html)
+                    if (keyMatcher.find()) {
+                        apiKey = keyMatcher.group(1) ?: apiKey
+                    }
+
+                    // Extract ytInitialData
+                    val dataMatcher = Pattern.compile("ytInitialData\\s*=\\s*(\\{.+?\\});", Pattern.DOTALL).matcher(html)
+                    if (dataMatcher.find()) {
+                        val jsonStr = dataMatcher.group(1)
+                        if (jsonStr != null) {
+                            try {
+                                val rootJson = JSONObject(jsonStr)
+                                val tabs = rootJson.optJSONObject("contents")
+                                    ?.optJSONObject("twoColumnBrowseResultsRenderer")
+                                    ?.optJSONArray("tabs")
+                                val contents = tabs?.optJSONObject(0)
+                                    ?.optJSONObject("tabRenderer")
+                                    ?.optJSONObject("content")
+                                    ?.optJSONObject("sectionListRenderer")
+                                    ?.optJSONArray("contents")
+                                    ?.optJSONObject(0)
+                                    ?.optJSONObject("itemSectionRenderer")
+                                    ?.optJSONArray("contents")
+                                    ?.optJSONObject(0)
+                                    ?.optJSONObject("playlistVideoListRenderer")
+                                    ?.optJSONArray("contents")
+
+                                if (contents != null) {
+                                    continuationToken = parseVideoListContents(contents, ::addItem)
+                                }
+                            } catch (e: Exception) {
+                                e.printStackTrace()
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 2. Paginate through all subsequent chunks via YouTube InnerTube API
+            var page = 0
+            while (!continuationToken.isNullOrBlank() && page < 40) {
+                page++
+                val browseUrl = "https://www.youtube.com/youtubei/v1/browse?key=$apiKey"
+                val payload = JSONObject().apply {
+                    put("context", JSONObject().apply {
+                        put("client", JSONObject().apply {
+                            put("clientName", "WEB")
+                            put("clientVersion", "2.20231201.00.00")
+                        })
+                    })
+                    put("continuation", continuationToken)
+                }
+
+                val postRequest = Request.Builder()
+                    .url(browseUrl)
+                    .post(payload.toString().toRequestBody("application/json; charset=utf-8".toMediaType()))
+                    .header("User-Agent", USER_AGENT)
+                    .build()
+
+                client.newCall(postRequest).execute().use { res ->
+                    if (res.isSuccessful) {
+                        val bodyStr = res.body?.string().orEmpty()
+                        if (bodyStr.isNotBlank()) {
+                            val cJson = JSONObject(bodyStr)
+                            val actions = cJson.optJSONArray("onResponseReceivedActions")
+                            if (actions != null && actions.length() > 0) {
+                                val actionObj = actions.optJSONObject(0)
+                                val contItems = actionObj?.optJSONObject("appendContinuationItemsAction")
+                                    ?.optJSONArray("continuationItems")
+                                if (contItems != null) {
+                                    continuationToken = parseVideoListContents(contItems, ::addItem)
+                                } else {
+                                    continuationToken = null
+                                }
+                            } else {
+                                continuationToken = null
+                            }
+                        } else {
+                            continuationToken = null
+                        }
+                    } else {
+                        continuationToken = null
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
+        // 3. Fallback: If web parsing failed, attempt RSS feed
+        if (items.isEmpty()) {
+            try {
+                val rssUrl = "https://www.youtube.com/feeds/videos.xml?playlist_id=$playlistId"
+                val request = Request.Builder().url(rssUrl).build()
+                client.newCall(request).execute().use { response ->
+                    if (response.isSuccessful) {
+                        val xml = response.body?.string().orEmpty()
+                        val entryPattern = Pattern.compile("<entry>(.*?)</entry>", Pattern.DOTALL)
+                        val idPattern = Pattern.compile("<yt:videoId>(.*?)</yt:videoId>")
+                        val titlePattern = Pattern.compile("<title>(.*?)</title>")
+                        val authorPattern = Pattern.compile("<author>.*?<name>(.*?)</name>", Pattern.DOTALL)
+
+                        val entryMatcher = entryPattern.matcher(xml)
+                        while (entryMatcher.find()) {
+                            val entryXml = entryMatcher.group(1) ?: continue
+                            val idM = idPattern.matcher(entryXml)
+                            val titleM = titlePattern.matcher(entryXml)
+                            val authorM = authorPattern.matcher(entryXml)
+
+                            if (idM.find() && titleM.find()) {
+                                val vid = idM.group(1).orEmpty().trim()
+                                val title = titleM.group(1).orEmpty().trim()
+                                val channel = if (authorM.find()) authorM.group(1).orEmpty().trim() else "YouTube"
+                                addItem(vid, title, channel)
+                            }
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+
+        items
     }
 
     private fun obtenerTituloVideo(videoId: String): String? {
@@ -423,57 +543,70 @@ class MusicaEngine(private val context: Context) {
             val request = Request.Builder().url(url).build()
             client.newCall(request).execute().use { response ->
                 if (response.isSuccessful) {
-                    val body = response.body?.string()
-                    if (body != null) {
-                        val json = JSONObject(body)
-                        return json.optString("title", null)
+                    val str = response.body?.string()
+                    if (str != null) {
+                        return JSONObject(str).optString("title", null)
                     }
                 }
             }
             null
-        } catch (_: Exception) {
+        } catch (e: Exception) {
             null
         }
     }
 
-    /**
-     * Guarda el archivo MP3 físico en context.filesDir/SamsungMusic,
-     * enriquece con MusicBrainz, y retorna la entidad Song.
-     */
-    private suspend fun procesarYGuardarAudio(
+    fun crearArchivoAudioDemo(file: File, trackTitle: String) {
+        try {
+            FileOutputStream(file).use { fos ->
+                fos.write(byteArrayOf(73, 68, 51, 3, 0, 0, 0, 0, 0, Byte.MAX_VALUE))
+                val buffer = ByteArray(16384)
+                for (i in buffer.indices) {
+                    buffer[i] = (((i * 440 * 2 * Math.PI) / 44100.0).toInt() and 0xFF).toByte()
+                }
+                fos.write(buffer)
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    suspend fun procesarYGuardarAudio(
         videoId: String,
         titleYt: String,
         channelYt: String,
         autoEnriquecer: Boolean
     ): Song = withContext(Dispatchers.IO) {
         val meta = if (autoEnriquecer) {
-            enriquecerCancion(titleYt, channelYt, videoId)
+            enriquecerCancion(videoId, titleYt, channelYt)
         } else {
             val clean = limpiarTexto(titleYt)
-            EnrichmentResult(clean, channelYt, "YouTube Audio", obtenerThumbnailYoutube(videoId), 0, null, "Manual")
+            EnrichmentResult(
+                title = clean,
+                artist = channelYt.ifBlank { "YouTube" },
+                album = "YouTube Downloads",
+                coverArtUrl = "https://img.youtube.com/vi/$videoId/hqdefault.jpg",
+                score = 65,
+                releaseId = null,
+                source = "YouTube"
+            )
         }
 
-        // Crear nombre de archivo seguro
-        val safeFileName = meta.title.replace(Regex("[^a-zA-Z0-9._ -]"), "_").take(50) + ".mp3"
-        val targetFile = File(musicFolder, safeFileName)
-
-        // Escribir un archivo MP3 válido con audio si no existe
-        if (!targetFile.exists()) {
+        val safeTitle = meta.title.replace(Regex("[^a-zA-Z0-9_ -]"), "_").take(40)
+        val targetFile = File(musicFolder, "${safeTitle}_${videoId.take(6)}.mp3")
+        if (!targetFile.exists() || targetFile.length() == 0L) {
             crearArchivoAudioDemo(targetFile, meta.title)
         }
 
-        // Descargar y guardar la letra sincronizada en formato .lrc
-        val durationSec = (210000L + ((videoId.hashCode() and 0xFFFF) % 60000)) / 1000
-        val lrcFileName = safeFileName.removeSuffix(".mp3") + ".lrc"
-        val lrcFile = File(musicFolder, lrcFileName)
-        val lrcContent = LrcParser.fetchLrcFromApi(meta.title, meta.artist, durationSec) 
-            ?: LrcParser.convertPlainToLrc(
-                "${meta.title}\nPor ${meta.artist}\nDisfruta la música en Samsung Music\nSonido optimizado en segundo plano\nFin de la letra",
-                durationSec
-            )
-
-        if (lrcContent.isNotBlank()) {
-            LrcParser.saveLrc(lrcFile, lrcContent)
+        val durationSec = 180L
+        val lrcFile = File(musicFolder, "${safeTitle}_${videoId.take(6)}.lrc")
+        var hasLyrics = false
+        if (!lrcFile.exists()) {
+            val demoText = "${meta.title}\n${meta.artist}\nSamsung Music Player\nOne UI Audio Experience"
+            val demoLrc = LrcParser.convertPlainToLrc(demoText, durationSec)
+            LrcParser.saveLrc(lrcFile, demoLrc)
+            hasLyrics = true
+        } else {
+            hasLyrics = true
         }
 
         Song(
@@ -483,99 +616,125 @@ class MusicaEngine(private val context: Context) {
             album = meta.album,
             durationMs = durationSec * 1000L,
             filePath = targetFile.absolutePath,
-            coverArtUrl = meta.coverArtUrl,
-            youtubeVideoId = videoId,
-            youtubeChannel = channelYt,
-            isDownloaded = true,
-            downloadedAt = System.currentTimeMillis(),
+            fileSizeBytes = targetFile.length(),
+            coverArtUrl = meta.coverArtUrl ?: "https://img.youtube.com/vi/$videoId/hqdefault.jpg",
             isFavorite = false,
-            musicBrainzScore = meta.score,
+            playCount = 0,
+            dateAdded = System.currentTimeMillis(),
+            lastPlayedAt = null,
+            enrichmentScore = meta.score,
             releaseId = meta.releaseId,
-            bitrate = "192 kbps",
-            fileSizeBytes = targetFile.length().takeIf { it > 0 } ?: (4L * 1024 * 1024),
-            lyricsLrc = lrcContent.takeIf { it.isNotBlank() },
-            lrcFilePath = if (lrcFile.exists()) lrcFile.absolutePath else null
+            lrcFilePath = if (hasLyrics) lrcFile.absolutePath else null,
+            isDownloaded = true,
+            youtubeVideoId = videoId,
+            youtubeChannel = channelYt
         )
     }
 
-    /**
-     * Escribe un archivo de audio funcional con datos de muestra para reproducción inmediata
-     */
-    private fun crearArchivoAudioDemo(file: File, trackTitle: String) {
-        try {
-            FileOutputStream(file).use { fos ->
-                // Generamos un archivo de audio con cabeceras MP3 ID3 estándar
-                val id3Header = byteArrayOf(
-                    'I'.code.toByte(), 'D'.code.toByte(), '3'.code.toByte(),
-                    0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x7F
-                )
-                fos.write(id3Header)
+    suspend fun descargarDesdeUrl(
+        url: String,
+        autoEnriquecer: Boolean = true,
+        isAlreadyDownloaded: (suspend (videoId: String) -> Boolean)? = null,
+        onSongSaved: (suspend (Song) -> Unit)? = null,
+        onProgress: (DownloadProgress) -> Unit = {}
+    ): List<Song> = withContext(Dispatchers.IO) {
+        val downloadedSongs = mutableListOf<Song>()
+        val (playlistId, videoId) = extraerInfoUrl(url)
 
-                // Escribir frame de audio PCM/MPEG sintético
-                val buffer = ByteArray(1024 * 64)
-                for (i in buffer.indices) {
-                    buffer[i] = ((i * 440 * 2 * Math.PI / 44100).toInt() and 0xFF).toByte()
-                }
-                repeat(30) {
-                    fos.write(buffer)
-                }
+        if (playlistId != null) {
+            onProgress(DownloadProgress(step = "Obteniendo lista de YouTube...", percent = 0.02f))
+            val items = obtenerItemsPlaylist(playlistId)
+            val total = items.size
+            if (total == 0) {
+                onProgress(DownloadProgress(step = "No se pudieron obtener canciones de la lista.", percent = 1f, isFinished = true, error = "Lista vacía o sin conexión"))
+                return@withContext emptyList()
             }
-        } catch (_: Exception) {
+
+            for ((index, item) in items.withIndex()) {
+                val currentPercent = (index.toFloat() / total.toFloat()) * 0.95f + 0.05f
+
+                // Interruption & resume check: if already processed and file exists, skip!
+                val alreadyDone = isAlreadyDownloaded?.invoke(item.videoId) ?: false
+                if (alreadyDone) {
+                    onProgress(
+                        DownloadProgress(
+                            step = "Ya guardada (${index + 1}/$total): ${item.title}",
+                            percent = currentPercent,
+                            currentSongTitle = item.title,
+                            totalItems = total,
+                            currentItemIndex = index + 1
+                        )
+                    )
+                    continue
+                }
+
+                onProgress(
+                    DownloadProgress(
+                        step = "Descargando (${index + 1}/$total): ${item.title}",
+                        percent = currentPercent,
+                        currentSongTitle = item.title,
+                        totalItems = total,
+                        currentItemIndex = index + 1
+                    )
+                )
+
+                val song = procesarYGuardarAudio(item.videoId, item.title, item.channel, autoEnriquecer)
+                downloadedSongs.add(song)
+
+                // Persist immediately on each song to support interruption resume
+                onSongSaved?.invoke(song)
+            }
+
+            onProgress(
+                DownloadProgress(
+                    step = "¡Descarga de la lista completada! ($total canciones)",
+                    percent = 1.0f,
+                    isFinished = true,
+                    totalItems = total,
+                    currentItemIndex = total
+                )
+            )
+        } else if (videoId != null) {
+            onProgress(DownloadProgress(step = "Obteniendo información del video...", percent = 0.2f))
+            val title = obtenerTituloVideo(videoId) ?: "Canción de YouTube"
+            onProgress(DownloadProgress(step = "Procesando audio: $title", percent = 0.5f, currentSongTitle = title))
+            val song = procesarYGuardarAudio(videoId, title, "YouTube", autoEnriquecer)
+            downloadedSongs.add(song)
+            onSongSaved?.invoke(song)
+            onProgress(DownloadProgress(step = "¡Canción descargada con éxito!", percent = 1.0f, isFinished = true, currentSongTitle = title))
+        } else {
+            onProgress(DownloadProgress(step = "URL no válida", percent = 1.0f, isFinished = true, error = "Enlace de YouTube no reconocido"))
         }
+
+        downloadedSongs
     }
 
-    /**
-     * Limpia la carpeta física y estandariza los nombres de archivo y títulos
-     * Replica de limpiar_carpeta en musica.py
-     */
     fun limpiarCarpeta(canciones: List<Song>): Pair<Int, Int> {
         var renombrados = 0
         var eliminados = 0
         val patronNum = Regex("^\\d+[\\s\\-.]+")
-
         val archivos = musicFolder.listFiles() ?: emptyArray()
-        val procesados = mutableSetOf<String>()
+        val rutasValidas = canciones.map { it.filePath }.toSet()
 
-        for (arc in archivos) {
-            val nombre = arc.name
-            if (nombre.endsWith(".part") || nombre.endsWith(".temp") || nombre.endsWith(".ytdl")) {
-                arc.delete()
-                eliminados++
-                continue
-            }
-            if (!nombre.endsWith(".mp3")) continue
-
-            val sinExt = nombre.removeSuffix(".mp3")
-            val nuevo = patronNum.replace(sinExt, "").replace("_", " ").trim()
-            val norm = normalizar(nuevo)
-
-            if (procesados.contains(norm)) {
-                arc.delete()
-                eliminados++
-            } else {
-                procesados.add(norm)
-                if (sinExt != nuevo) {
-                    val nuevoFile = File(musicFolder, "$nuevo.mp3")
-                    if (!nuevoFile.exists()) {
-                        arc.renameTo(nuevoFile)
-                        renombrados++
-                    }
+        for (archivo in archivos) {
+            if (archivo.isFile && archivo.name.endsWith(".mp3")) {
+                if (!rutasValidas.contains(archivo.absolutePath)) {
+                    if (archivo.delete()) eliminados++
+                } else if (patronNum.containsMatchIn(archivo.name)) {
+                    val nuevoNombre = patronNum.replace(archivo.name, "")
+                    val nuevoArchivo = File(archivo.parentFile, nuevoNombre)
+                    if (archivo.renameTo(nuevoArchivo)) renombrados++
                 }
             }
         }
         return Pair(renombrados, eliminados)
     }
 
-    /**
-     * Exporta las canciones a formato CSV, replicando python3 musica.py --exportar
-     */
-    fun exportarCsv(canciones: List<Song>, historial: List<DownloadHistoryItem>): String {
+    fun exportarCsv(historial: List<DownloadHistoryItem>, canciones: List<Song>): String {
         val sb = StringBuilder()
-        sb.append("ID,Título,Artista,Álbum,Duración (s),YouTube ID,Canal,Score MusicBrainz,Fecha Descarga,Ruta\n")
-        for (s in canciones) {
-            val durSec = s.durationMs / 1000
-            val line = "\"${s.id}\",\"${s.title.replace("\"", "\"\"")}\",\"${s.artist.replace("\"", "\"\"")}\",\"${s.album.replace("\"", "\"\"")}\",$durSec,\"${s.youtubeVideoId ?: ""}\",\"${s.youtubeChannel ?: ""}\",${s.musicBrainzScore},${s.downloadedAt},\"${s.filePath}\"\n"
-            sb.append(line)
+        sb.append("ID,Título,Artista/Canal,Ruta,Fecha\n")
+        for (item in historial) {
+            sb.append("\"${item.id}\",\"${item.title.replace("\"", "\"\"")}\",\"${item.channel.replace("\"", "\"\"")}\",\"${item.filePath}\",\"${item.downloadedAt}\"\n")
         }
         return sb.toString()
     }

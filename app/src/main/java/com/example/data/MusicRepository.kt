@@ -1,18 +1,6 @@
 package com.example.data
 
 import kotlinx.coroutines.flow.Flow
-import java.io.File
-
-data class MusicStatistics(
-    val totalSongs: Int,
-    val totalFavorites: Int,
-    val totalDownloadedYt: Int,
-    val totalDurationSeconds: Long,
-    val totalArtists: Int,
-    val totalAlbums: Int,
-    val totalSizeBytes: Long,
-    val enrichedCount: Int
-)
 
 class MusicRepository(
     private val songDao: SongDao,
@@ -25,16 +13,12 @@ class MusicRepository(
     val allPlaylists: Flow<List<Playlist>> = playlistDao.getAllPlaylists()
     val allPlaylistsWithSongs: Flow<List<PlaylistWithSongs>> = playlistDao.getAllPlaylistsWithSongs()
 
-    fun getPlaylistWithSongs(playlistId: Long): Flow<PlaylistWithSongs?> =
-        playlistDao.getPlaylistWithSongs(playlistId)
+    fun getPlaylistWithSongs(playlistId: Long): Flow<PlaylistWithSongs?> {
+        return playlistDao.getPlaylistWithSongs(playlistId)
+    }
 
     suspend fun createPlaylist(name: String, description: String = "", coverArtUrl: String? = null): Long {
-        val playlist = Playlist(
-            name = name,
-            description = description,
-            coverArtUrl = coverArtUrl
-        )
-        return playlistDao.insertPlaylist(playlist)
+        return playlistDao.insertPlaylist(Playlist(name = name, description = description, coverArtUrl = coverArtUrl))
     }
 
     suspend fun renamePlaylist(playlistId: Long, newName: String) {
@@ -50,20 +34,12 @@ class MusicRepository(
     }
 
     suspend fun addSongToPlaylist(playlistId: Long, songId: String) {
-        val crossRef = PlaylistSongCrossRef(
-            playlistId = playlistId,
-            songId = songId
-        )
-        playlistDao.addSongToPlaylist(crossRef)
+        playlistDao.addSongToPlaylist(PlaylistSongCrossRef(playlistId = playlistId, songId = songId))
     }
 
     suspend fun addSongsToPlaylist(playlistId: Long, songIds: List<String>) {
-        val crossRefs = songIds.mapIndexed { idx, sId ->
-            PlaylistSongCrossRef(
-                playlistId = playlistId,
-                songId = sId,
-                orderIndex = idx
-            )
+        val crossRefs = songIds.mapIndexed { index, songId ->
+            PlaylistSongCrossRef(playlistId = playlistId, songId = songId, orderIndex = index)
         }
         playlistDao.addSongsToPlaylist(crossRefs)
     }
@@ -82,20 +58,33 @@ class MusicRepository(
 
     suspend fun getPlaylistCount(): Int = playlistDao.getPlaylistCount()
 
-    suspend fun insertSong(song: Song) = songDao.insertSong(song)
-    suspend fun insertSongs(songs: List<Song>) = songDao.insertSongs(songs)
-    suspend fun updateSong(song: Song) = songDao.updateSong(song)
+    suspend fun getSongById(songId: String): Song? {
+        return songDao.getSongById(songId)
+    }
+
+    suspend fun insertSong(song: Song) {
+        songDao.insertSong(song)
+    }
+
+    suspend fun insertSongs(songs: List<Song>) {
+        songDao.insertSongs(songs)
+    }
+
+    suspend fun updateSong(song: Song) {
+        songDao.updateSong(song)
+    }
+
     suspend fun deleteSong(song: Song) {
         songDao.deleteSong(song)
-        if (song.filePath.isNotBlank()) {
-            val file = File(song.filePath)
-            if (file.exists()) {
-                file.delete()
-            }
-        }
     }
-    suspend fun setFavorite(songId: String, isFavorite: Boolean) = songDao.setFavorite(songId, isFavorite)
-    suspend fun incrementPlayCount(songId: String) = songDao.incrementPlayCount(songId)
+
+    suspend fun setFavorite(songId: String, isFavorite: Boolean) {
+        songDao.setFavorite(songId, isFavorite)
+    }
+
+    suspend fun incrementPlayCount(songId: String) {
+        songDao.incrementPlayCount(songId)
+    }
 
     suspend fun updateMetadata(
         id: String,
@@ -105,23 +94,27 @@ class MusicRepository(
         coverArtUrl: String?,
         score: Int,
         releaseId: String?
-    ) = songDao.updateMetadata(id, title, artist, album, coverArtUrl, score, releaseId)
+    ) {
+        songDao.updateMetadata(id, title, artist, album, coverArtUrl, score, releaseId)
+    }
 
     suspend fun isInHistory(videoId: String): Boolean {
         return historyDao.getByVideoId(videoId) != null
     }
 
     suspend fun recordDownload(videoId: String, title: String, channel: String, filePath: String) {
-        val item = DownloadHistoryItem(
-            id = "youtube $videoId",
-            videoId = videoId,
-            title = title,
-            channel = channel,
-            filePath = filePath,
-            downloadedAt = System.currentTimeMillis()
+        historyDao.insertHistory(
+            DownloadHistoryItem(
+                id = videoId,
+                videoId = videoId,
+                title = title,
+                channel = channel,
+                filePath = filePath
+            )
         )
-        historyDao.insertHistory(item)
     }
 
-    suspend fun clearHistory() = historyDao.clearHistory()
+    suspend fun clearHistory() {
+        historyDao.clearHistory()
+    }
 }

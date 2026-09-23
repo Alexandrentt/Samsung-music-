@@ -1,8 +1,9 @@
 package com.example.player
 
 import android.content.Context
-import android.media.AudioAttributes
+import android.content.Intent
 import android.media.MediaPlayer
+import androidx.core.content.ContextCompat
 import com.example.data.Song
 import com.example.engine.LrcParser
 import com.example.engine.LyricLine
@@ -17,22 +18,9 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.io.File
 
-enum class RepeatMode {
-    OFF, ALL, ONE
-}
-
 class AudioPlayerManager(private val context: Context) {
 
-    companion object {
-        var instance: AudioPlayerManager? = null
-            private set
-    }
-
-    init {
-        instance = this
-    }
-
-    private val scope = CoroutineScope(Dispatchers.Main + Job())
+    private val scope = CoroutineScope(Dispatchers.Main)
     private var mediaPlayer: MediaPlayer? = null
     private var progressJob: Job? = null
 
@@ -45,13 +33,13 @@ class AudioPlayerManager(private val context: Context) {
     private val _currentPositionMs = MutableStateFlow(0L)
     val currentPositionMs: StateFlow<Long> = _currentPositionMs.asStateFlow()
 
-    private val _durationMs = MutableStateFlow(1L)
+    private val _durationMs = MutableStateFlow(0L)
     val durationMs: StateFlow<Long> = _durationMs.asStateFlow()
 
     private val _isShuffleEnabled = MutableStateFlow(false)
     val isShuffleEnabled: StateFlow<Boolean> = _isShuffleEnabled.asStateFlow()
 
-    private val _repeatMode = MutableStateFlow(RepeatMode.ALL)
+    private val _repeatMode = MutableStateFlow(RepeatMode.OFF)
     val repeatMode: StateFlow<RepeatMode> = _repeatMode.asStateFlow()
 
     private val _queue = MutableStateFlow<List<Song>>(emptyList())
@@ -63,13 +51,14 @@ class AudioPlayerManager(private val context: Context) {
     private val _activeLyricIndex = MutableStateFlow(0)
     val activeLyricIndex: StateFlow<Int> = _activeLyricIndex.asStateFlow()
 
-    private var isSimulatedPlayback = false
-    private var nextPrioritySongId: String? = null
     private var hasCountedHalfPlay = false
     var onHalfPlayedCallback: ((String) -> Unit)? = null
 
+    init {
+        instance = this
+    }
+
     fun playSong(song: Song, newQueue: List<Song> = emptyList()) {
-        hasCountedHalfPlay = false
         if (newQueue.isNotEmpty()) {
             _queue.value = newQueue
         } else if (!_queue.value.any { it.id == song.id }) {
@@ -77,192 +66,78 @@ class AudioPlayerManager(private val context: Context) {
         }
 
         _currentSong.value = song
-        _durationMs.value = if (song.durationMs > 0) song.durationMs else 210000L
-        _currentPositionMs.value = 0L
-
+        hasCountedHalfPlay = false
         loadLyricsForSong(song)
         startPlayback(song)
     }
 
-    /**
-     * Samsung Music: "Reproducir a continuación"
-     * Agrega la canción a la cola actual INMEDIATAMENTE después de la canción en reproducción,
-     * no al final de la cola. Si la canción ya estaba en otra posición de la lista,
-     * se reubica para que suene justo a continuación.
-     */
-    fun playNext(song: Song) {
-        val current = _currentSong.value
-        val currentQueue = _queue.value.toMutableList()
-
-        if (current == null || currentQueue.isEmpty()) {
-            playSong(song, listOf(song))
-            return
-        }
-
-        if (current.id == song.id) {
-            return
-        }
-
-        // Remover si ya existe previamente para evitar duplicados y moverla a la posición siguiente
-        currentQueue.removeAll { it.id == song.id }
-
-        val currentIndex = currentQueue.indexOfFirst { it.id == current.id }
-        val insertIndex = if (currentIndex != -1) {
-            currentIndex + 1
-        } else {
-            currentQueue.add(0, current)
-            1
-        }
-
-        currentQueue.add(insertIndex, song)
-        _queue.value = currentQueue
-        nextPrioritySongId = song.id
-    }
-
-    /**
-     * Agrega una colección de canciones inmediatamente a continuación de la pista actual.
-     */
-    fun playNext(songs: List<Song>) {
-        if (songs.isEmpty()) return
-        val current = _currentSong.value
-        val currentQueue = _queue.value.toMutableList()
-
-        if (current == null || currentQueue.isEmpty()) {
-            playSong(songs.first(), songs)
-            return
-        }
-
-        val songIds = songs.map { it.id }.toSet()
-        currentQueue.removeAll { it.id in songIds }
-
-        val currentIndex = currentQueue.indexOfFirst { it.id == current.id }
-        val insertIndex = if (currentIndex != -1) currentIndex + 1 else 0
-
-        currentQueue.addAll(insertIndex, songs)
-        _queue.value = currentQueue
-        nextPrioritySongId = songs.first().id
-    }
-
-    /**
-     * Remueve una canción de la cola actual de reproducción.
-     */
-    fun removeFromQueue(songId: String) {
-        val currentQueue = _queue.value.toMutableList()
-        val index = currentQueue.indexOfFirst { it.id == songId }
-        if (index != -1) {
-            val isCurrent = _currentSong.value?.id == songId
-            currentQueue.removeAt(index)
-            _queue.value = currentQueue
-            if (isCurrent) {
-                if (currentQueue.isNotEmpty()) {
-                    val nextIndex = index.coerceAtMost(currentQueue.size - 1)
-                    playSong(currentQueue[nextIndex])
-                } else {
-                    stopPlayer()
-                    _currentSong.value = null
-                    _isPlaying.value = false
-                }
-            }
-        }
-    }
-
     private fun loadLyricsForSong(song: Song) {
-        // 1. Intentar desde song.lyricsLrc
-        var rawLrc = song.lyricsLrc
-        // 2. Si es nulo, buscar archivo .lrc en disco
-        if (rawLrc.isNullOrBlank()) {
-            val candidateFile = if (!song.lrcFilePath.isNullOrBlank()) {
-                File(song.lrcFilePath)
-            } else if (song.filePath.isNotBlank()) {
-                File(song.filePath.removeSuffix(".mp3") + ".lrc")
-            } else null
-
-            if (candidateFile != null && candidateFile.exists()) {
-                rawLrc = candidateFile.readText(Charsets.UTF_8)
+        val lrcPath = song.lyricsPath
+        if (lrcPath != null && File(lrcPath).exists()) {
+            try {
+                val content = File(lrcPath).readText(Charsets.UTF_8)
+                val lines = LrcParser.parse(content)
+                _currentLyrics.value = lines
+                return
+            } catch (e: Exception) {
+                e.printStackTrace()
             }
         }
-
-        val parsed = LrcParser.parse(rawLrc)
-        if (parsed.isNotEmpty()) {
-            _currentLyrics.value = parsed
-        } else {
-            // Generar sincronización inicial para una experiencia visual instantánea
-            val dummyLines = listOf(
-                LyricLine(0L, song.title),
-                LyricLine(4000L, song.artist),
-                LyricLine(8000L, "♪ ♪ ♪"),
-                LyricLine(14000L, "Reproduciendo en Samsung Music"),
-                LyricLine(22000L, "Audio de alta fidelidad con SoundAlive"),
-                LyricLine(32000L, "Soporte de segundo plano activo"),
-                LyricLine(45000L, "♪ ♪ ♪"),
-                LyricLine(60000L, "Disfruta de la mejor experiencia musical"),
-                LyricLine(80000L, "♪ ♪ ♪"),
-                LyricLine(120000L, song.album),
-                LyricLine(160000L, "Fin de la pista")
-            )
-            _currentLyrics.value = dummyLines
-        }
-        _activeLyricIndex.value = 0
+        _currentLyrics.value = emptyList()
     }
 
     private fun startPlayback(song: Song) {
-        stopPlayer()
-        isSimulatedPlayback = false
-
         try {
-            val file = File(song.filePath)
-            if (file.exists() && file.length() > 5000) {
-                mediaPlayer = MediaPlayer().apply {
-                    setAudioAttributes(
-                        AudioAttributes.Builder()
-                            .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                            .setUsage(AudioAttributes.USAGE_MEDIA)
-                            .build()
-                    )
-                    setDataSource(file.absolutePath)
-                    prepare()
-                    start()
-                    setOnCompletionListener {
-                        handleSongCompletion()
-                    }
-                }
-                _durationMs.value = mediaPlayer?.duration?.toLong() ?: song.durationMs
-                _isPlaying.value = true
-            } else {
-                isSimulatedPlayback = true
-                _isPlaying.value = true
-            }
-        } catch (_: Exception) {
-            isSimulatedPlayback = true
-            _isPlaying.value = true
-        }
+            mediaPlayer?.release()
+            mediaPlayer = null
 
-        notifyForegroundService(true)
-        startProgressTicker()
+            val file = File(song.filePath)
+            val mp = MediaPlayer()
+            if (file.exists() && file.length() > 0) {
+                mp.setDataSource(file.absolutePath)
+                mp.prepare()
+            }
+
+            val actualDuration = if (mp.duration > 0) mp.duration.toLong() else song.durationSeconds * 1000L
+            _durationMs.value = actualDuration
+            _currentPositionMs.value = 0L
+
+            mp.setOnCompletionListener {
+                handleSongCompletion()
+            }
+
+            mp.start()
+            mediaPlayer = mp
+            _isPlaying.value = true
+            startProgressTicker()
+            notifyForegroundService(true)
+        } catch (e: Exception) {
+            e.printStackTrace()
+            // Graceful fallback for synthetic demo playback
+            _isPlaying.value = true
+            _durationMs.value = song.durationSeconds * 1000L
+            startProgressTicker()
+            notifyForegroundService(true)
+        }
     }
 
     private fun notifyForegroundService(playing: Boolean) {
-        val s = _currentSong.value ?: return
+        val song = _currentSong.value ?: return
         try {
-            MusicPlaybackService.startService(
-                context = context,
-                title = s.title,
-                artist = s.artist,
-                isPlaying = playing,
-                artUrl = s.coverArtUrl
-            )
-        } catch (_: Exception) {}
+            val intent = Intent(context, MusicPlaybackService::class.java).apply {
+                action = MusicPlaybackService.ACTION_START
+                putExtra(MusicPlaybackService.EXTRA_TITLE, song.title)
+                putExtra(MusicPlaybackService.EXTRA_ARTIST, song.artist)
+                putExtra(MusicPlaybackService.EXTRA_IS_PLAYING, playing)
+                putExtra(MusicPlaybackService.EXTRA_ART_URL, song.coverArtUrl)
+            }
+            ContextCompat.startForegroundService(context, intent)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
     }
 
     fun togglePlayPause() {
-        if (_currentSong.value == null) {
-            val first = _queue.value.firstOrNull()
-            if (first != null) {
-                playSong(first)
-            }
-            return
-        }
-
         if (_isPlaying.value) {
             pause()
         } else {
@@ -271,32 +146,38 @@ class AudioPlayerManager(private val context: Context) {
     }
 
     fun pause() {
-        _isPlaying.value = false
         try {
             mediaPlayer?.pause()
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+        _isPlaying.value = false
         notifyForegroundService(false)
-        progressJob?.cancel()
     }
 
     fun resume() {
-        if (_currentSong.value == null) return
-        _isPlaying.value = true
+        if (_currentSong.value == null && _queue.value.isNotEmpty()) {
+            playSong(_queue.value.first())
+            return
+        }
         try {
             mediaPlayer?.start()
-        } catch (_: Exception) {
-            isSimulatedPlayback = true
+        } catch (e: Exception) {
+            e.printStackTrace()
         }
-        notifyForegroundService(true)
+        _isPlaying.value = true
         startProgressTicker()
+        notifyForegroundService(true)
     }
 
     fun seekTo(positionMs: Long) {
         val clamped = positionMs.coerceIn(0L, _durationMs.value)
-        _currentPositionMs.value = clamped
         try {
             mediaPlayer?.seekTo(clamped.toInt())
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+        _currentPositionMs.value = clamped
         updateActiveLyric(clamped)
     }
 
@@ -315,33 +196,29 @@ class AudioPlayerManager(private val context: Context) {
     }
 
     fun skipToNext() {
-        val current = _currentSong.value ?: return
-        val currentQueue = _queue.value
-        if (currentQueue.isEmpty()) return
+        val q = _queue.value
+        val cur = _currentSong.value
+        if (q.isEmpty()) return
 
-        val currentIndex = currentQueue.indexOfFirst { it.id == current.id }
-
-        // Si se seleccionó una pista explícita para reproducir a continuación, darle prioridad inmediata
-        if (nextPrioritySongId != null) {
-            val priorityIndex = currentQueue.indexOfFirst { it.id == nextPrioritySongId }
-            nextPrioritySongId = null
-            if (priorityIndex in currentQueue.indices && priorityIndex != currentIndex) {
-                playSong(currentQueue[priorityIndex])
-                return
+        val nextSong = if (_isShuffleEnabled.value) {
+            val otherSongs = q.filter { it.id != cur?.id }
+            if (otherSongs.isNotEmpty()) otherSongs.random() else q.first()
+        } else {
+            val idx = q.indexOfFirst { it.id == cur?.id }
+            if (idx != -1 && idx + 1 < q.size) {
+                q[idx + 1]
+            } else if (_repeatMode.value == RepeatMode.ALL) {
+                q.first()
+            } else {
+                null
             }
         }
 
-        val nextIndex = when {
-            _isShuffleEnabled.value -> {
-                currentQueue.indices.filter { it != currentIndex }.randomOrNull() ?: currentIndex
-            }
-            currentIndex < currentQueue.size - 1 -> currentIndex + 1
-            _repeatMode.value == RepeatMode.ALL -> 0
-            else -> currentIndex
-        }
-
-        if (nextIndex in currentQueue.indices && (nextIndex != currentIndex || currentQueue.size == 1)) {
-            playSong(currentQueue[nextIndex])
+        if (nextSong != null) {
+            playSong(nextSong)
+        } else {
+            pause()
+            seekTo(0L)
         }
     }
 
@@ -350,19 +227,17 @@ class AudioPlayerManager(private val context: Context) {
             seekTo(0L)
             return
         }
-        val current = _currentSong.value ?: return
-        val currentQueue = _queue.value
-        if (currentQueue.isEmpty()) return
+        val q = _queue.value
+        val cur = _currentSong.value
+        if (q.isEmpty()) return
 
-        val currentIndex = currentQueue.indexOfFirst { it.id == current.id }
-        val prevIndex = when {
-            currentIndex > 0 -> currentIndex - 1
-            _repeatMode.value == RepeatMode.ALL -> currentQueue.size - 1
-            else -> 0
-        }
-
-        if (prevIndex in currentQueue.indices) {
-            playSong(currentQueue[prevIndex])
+        val idx = q.indexOfFirst { it.id == cur?.id }
+        if (idx > 0) {
+            playSong(q[idx - 1])
+        } else if (_repeatMode.value == RepeatMode.ALL) {
+            playSong(q.last())
+        } else {
+            seekTo(0L)
         }
     }
 
@@ -386,33 +261,37 @@ class AudioPlayerManager(private val context: Context) {
         _repeatMode.value = mode
     }
 
-    fun playWithLoop(song: Song) {
-        _repeatMode.value = RepeatMode.ONE
-        playSong(song)
+    fun playWithLoop() {
+        setRepeatMode(RepeatMode.ALL)
+        if (!_isPlaying.value) resume()
     }
 
-    fun playWithShuffle(song: Song, queue: List<Song>) {
-        _isShuffleEnabled.value = true
-        playSong(song, queue)
+    fun playWithShuffle() {
+        setShuffle(true)
+        if (!_isPlaying.value) resume()
+    }
+
+    fun playNext(songs: List<Song>) {
+        val currentQ = _queue.value.toMutableList()
+        val cur = _currentSong.value
+        val idx = currentQ.indexOfFirst { it.id == cur?.id }
+        if (idx != -1) {
+            currentQ.addAll(idx + 1, songs)
+        } else {
+            currentQ.addAll(songs)
+        }
+        _queue.value = currentQ
+    }
+
+    fun removeFromQueue(songId: String) {
+        _queue.value = _queue.value.filter { it.id != songId }
     }
 
     private fun handleSongCompletion() {
-        when (_repeatMode.value) {
-            RepeatMode.ONE -> {
-                seekTo(0L)
-                resume()
-            }
-            RepeatMode.ALL -> skipToNext()
-            RepeatMode.OFF -> {
-                val currentQueue = _queue.value
-                val currentIndex = currentQueue.indexOfFirst { it.id == _currentSong.value?.id }
-                if (currentIndex < currentQueue.size - 1) {
-                    skipToNext()
-                } else {
-                    pause()
-                    seekTo(0L)
-                }
-            }
+        if (_repeatMode.value == RepeatMode.ONE) {
+            _currentSong.value?.let { playSong(it) }
+        } else {
+            skipToNext()
         }
     }
 
@@ -420,50 +299,50 @@ class AudioPlayerManager(private val context: Context) {
         progressJob?.cancel()
         progressJob = scope.launch {
             while (isActive && _isPlaying.value) {
-                delay(250)
-                if (isSimulatedPlayback) {
-                    val next = _currentPositionMs.value + 250L
-                    if (next >= _durationMs.value) {
-                        handleSongCompletion()
-                    } else {
-                        _currentPositionMs.value = next
-                        updateActiveLyric(next)
-                    }
-                } else {
-                    try {
-                        val current = mediaPlayer?.currentPosition?.toLong() ?: 0L
-                        _currentPositionMs.value = current
-                        updateActiveLyric(current)
-                    } catch (_: Exception) {}
+                val pos = try {
+                    mediaPlayer?.currentPosition?.toLong() ?: (_currentPositionMs.value + 1000L)
+                } catch (e: Exception) {
+                    _currentPositionMs.value + 1000L
                 }
 
-                // Incrementar contador si se reproduce más de la mitad de la canción
-                val currentPos = _currentPositionMs.value
-                val totalDur = _durationMs.value
-                if (!hasCountedHalfPlay && totalDur > 1000L && currentPos >= (totalDur / 2)) {
+                _currentPositionMs.value = pos
+                updateActiveLyric(pos)
+
+                val dur = _durationMs.value
+                if (!hasCountedHalfPlay && dur > 0 && pos >= (dur / 2)) {
                     hasCountedHalfPlay = true
-                    _currentSong.value?.let { current ->
-                        onHalfPlayedCallback?.invoke(current.id)
-                    }
+                    _currentSong.value?.let { onHalfPlayedCallback?.invoke(it.id) }
                 }
+
+                if (pos >= dur && dur > 0) {
+                    handleSongCompletion()
+                    break
+                }
+
+                delay(500L)
             }
         }
     }
 
-    private fun stopPlayer() {
-        progressJob?.cancel()
-        try {
-            mediaPlayer?.stop()
-            mediaPlayer?.release()
-        } catch (_: Exception) {}
+    fun stopPlayer() {
+        pause()
+        mediaPlayer?.release()
         mediaPlayer = null
+        _currentPositionMs.value = 0L
     }
 
     fun release() {
         stopPlayer()
-        try {
-            MusicPlaybackService.stopService(context)
-        } catch (_: Exception) {}
+        progressJob?.cancel()
+        if (instance == this) {
+            instance = null
+        }
+    }
+
+    companion object {
+        @Volatile
+        private var instance: AudioPlayerManager? = null
+
+        fun getInstance(): AudioPlayerManager? = instance
     }
 }
-

@@ -1,8 +1,5 @@
 package com.example.ui.components
 
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,34 +13,23 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AutoAwesome
-import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.CloudDownload
-import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Download
-import androidx.compose.material.icons.filled.History
-import androidx.compose.material.icons.filled.PlaylistPlay
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Switch
-import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -52,10 +38,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalClipboardManager
-import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -69,370 +51,232 @@ fun DownloadTabContent(
     downloadProgress: DownloadProgress?,
     isDownloading: Boolean,
     downloadHistory: List<DownloadHistoryItem>,
+    youtubeSearchQuery: String,
+    isSearchingYouTube: Boolean,
+    youtubeSearchResults: List<MusicaEngine.PlaylistItem>,
+    onYouTubeSearchQueryChange: (String) -> Unit,
+    onSearchYouTube: (String) -> Unit,
+    onSelectPlaylistItem: (MusicaEngine.PlaylistItem) -> Unit,
     onDownloadUrl: (String, Boolean) -> Unit,
-    onDownloadAllPlaylists: (Boolean) -> Unit,
-    onEnrichAll: () -> Unit
+    onClearHistory: () -> Unit
 ) {
     var urlInput by remember { mutableStateOf("") }
     var autoEnrich by remember { mutableStateOf(true) }
-    var skipExisting by remember { mutableStateOf(true) }
-    val clipboardManager = LocalClipboardManager.current
 
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
-            .padding(horizontal = 16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
+            .padding(16.dp)
     ) {
-        // Hero Card: Downloader Panel
+        // Material 3 Search Bar for YouTube queries and URLs
+        item {
+            YouTubeSearchBar(
+                query = youtubeSearchQuery,
+                onQueryChange = onYouTubeSearchQueryChange,
+                onSearch = onSearchYouTube,
+                isSearching = isSearchingYouTube,
+                searchResults = youtubeSearchResults,
+                onSelectPlaylistItem = { item ->
+                    urlInput = "https://www.youtube.com/watch?v=${item.videoId}"
+                    onSelectPlaylistItem(item)
+                },
+                modifier = Modifier.padding(bottom = 16.dp)
+            )
+        }
+
         item {
             Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 8.dp),
-                shape = RoundedCornerShape(24.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant
-                )
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
+                modifier = Modifier.fillMaxWidth()
             ) {
-                Column(modifier = Modifier.padding(20.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(
-                            modifier = Modifier
-                                .size(44.dp)
-                                .clip(CircleShape)
-                                .background(MaterialTheme.colorScheme.primary),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.CloudDownload,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.onPrimary,
-                                modifier = Modifier.size(24.dp)
-                            )
-                        }
-                        Spacer(modifier = Modifier.width(14.dp))
-                        Column {
-                            Text(
-                                text = "Descargador de YouTube",
-                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                            Text(
-                                text = "Descarga MP3 y letras sincronizadas .LRC automáticamente",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    // Input Field
-                    OutlinedTextField(
-                        value = urlInput,
-                        onValueChange = { urlInput = it },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("download_url_input"),
-                        placeholder = { Text("https://www.youtube.com/playlist?list=... o video") },
-                        singleLine = true,
-                        trailingIcon = {
-                            IconButton(onClick = {
-                                clipboardManager.getText()?.text?.let { urlInput = it }
-                            }) {
-                                Icon(
-                                    imageVector = Icons.Default.ContentPaste,
-                                    contentDescription = "Pegar URL",
-                                    tint = MaterialTheme.colorScheme.primary
-                                )
-                            }
-                        },
-                        shape = RoundedCornerShape(16.dp),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedContainerColor = MaterialTheme.colorScheme.surface,
-                            unfocusedContainerColor = MaterialTheme.colorScheme.surface,
-                            focusedBorderColor = MaterialTheme.colorScheme.primary
-                        )
-                    )
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    // Preset Chips from musica.py
+                Column(modifier = Modifier.padding(16.dp)) {
                     Text(
-                        text = "Playlists predeterminadas (musica.py):",
-                        style = MaterialTheme.typography.labelSmall,
+                        text = "Descargar Música o Lista",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 18.sp
+                    )
+                    Text(
+                        text = "Introduce el enlace de YouTube de una canción o lista de reproducción.",
+                        fontSize = 13.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
 
-                    Spacer(modifier = Modifier.height(6.dp))
+                    Spacer(modifier = Modifier.height(14.dp))
 
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        FilterChip(
-                            selected = urlInput == MusicaEngine.PLAYLIST_PRESETS[0],
-                            onClick = { urlInput = MusicaEngine.PLAYLIST_PRESETS[0] },
-                            label = { Text("Playlist 1 (Éxitos)", fontSize = 12.sp) },
-                            leadingIcon = { Icon(Icons.Default.PlaylistPlay, contentDescription = null, modifier = Modifier.size(16.dp)) },
-                            colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                                selectedLabelColor = MaterialTheme.colorScheme.primary
-                            )
-                        )
+                    OutlinedTextField(
+                        value = urlInput,
+                        onValueChange = { urlInput = it },
+                        label = { Text("URL de YouTube") },
+                        placeholder = { Text("https://youtube.com/...") },
+                        singleLine = true,
+                        trailingIcon = {
+                            if (urlInput.isNotEmpty()) {
+                                IconButton(onClick = { urlInput = "" }) {
+                                    Icon(imageVector = Icons.Default.Clear, contentDescription = "Limpiar")
+                                }
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    )
 
-                        FilterChip(
-                            selected = urlInput == MusicaEngine.PLAYLIST_PRESETS[1],
-                            onClick = { urlInput = MusicaEngine.PLAYLIST_PRESETS[1] },
-                            label = { Text("Playlist 2 (Pop/Rock)", fontSize = 12.sp) },
-                            leadingIcon = { Icon(Icons.Default.PlaylistPlay, contentDescription = null, modifier = Modifier.size(16.dp)) },
-                            colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                                selectedLabelColor = MaterialTheme.colorScheme.primary
-                            )
-                        )
-                    }
+                    Spacer(modifier = Modifier.height(10.dp))
 
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    // Options Toggles
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "Auto-enriquecer con MusicBrainz",
-                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium),
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                            Text(
-                                text = "Añade carátulas HQ y etiquetas oficiales ID3",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
+                        Column {
+                            Text("Enriquecer con MusicBrainz", fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                            Text("Obtiene carátula en HD, álbum y etiquetas", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
-                        Switch(
-                            checked = autoEnrich,
-                            onCheckedChange = { autoEnrich = it },
-                            colors = SwitchDefaults.colors(checkedThumbColor = MaterialTheme.colorScheme.primary)
-                        )
+                        Switch(checked = autoEnrich, onCheckedChange = { autoEnrich = it })
                     }
 
-                    Spacer(modifier = Modifier.height(20.dp))
+                    Spacer(modifier = Modifier.height(14.dp))
 
-                    // Action Buttons
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Button(
                             onClick = {
                                 if (urlInput.isNotBlank()) {
-                                    onDownloadUrl(urlInput, autoEnrich)
+                                    onDownloadUrl(urlInput.trim(), autoEnrich)
                                 }
                             },
                             enabled = !isDownloading && urlInput.isNotBlank(),
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(48.dp)
-                                .testTag("btn_descargar_url"),
-                            shape = RoundedCornerShape(16.dp),
-                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                            modifier = Modifier.weight(1f)
                         ) {
                             if (isDownloading) {
                                 CircularProgressIndicator(
-                                    modifier = Modifier.size(20.dp),
+                                    modifier = Modifier.size(18.dp),
                                     color = MaterialTheme.colorScheme.onPrimary,
                                     strokeWidth = 2.dp
                                 )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Descargando...")
                             } else {
-                                Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(18.dp))
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text("Descargar URL", fontWeight = FontWeight.Bold)
+                                Icon(imageVector = Icons.Default.CloudDownload, contentDescription = null)
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Descargar")
                             }
                         }
 
                         OutlinedButton(
-                            onClick = { onDownloadAllPlaylists(autoEnrich) },
-                            enabled = !isDownloading,
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(48.dp)
-                                .testTag("btn_descargar_todas"),
-                            shape = RoundedCornerShape(16.dp)
+                            onClick = {
+                                urlInput = MusicaEngine.PLAYLIST_URL_DEFAULT
+                                onDownloadUrl(MusicaEngine.PLAYLIST_URL_DEFAULT, autoEnrich)
+                            },
+                            enabled = !isDownloading
                         ) {
-                            Text("Todas las listas", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                            Icon(imageVector = Icons.Default.Refresh, contentDescription = null)
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Sincronizar Lista")
                         }
                     }
                 }
             }
         }
 
-        // Live Progress Card (if downloading)
-        if (downloadProgress != null) {
+        // Active Download Progress Card
+        if (downloadProgress != null && !downloadProgress.isFinished) {
             item {
+                Spacer(modifier = Modifier.height(16.dp))
                 Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(20.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f))
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
+                    modifier = Modifier.fillMaxWidth()
                 ) {
                     Column(modifier = Modifier.padding(16.dp)) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text(
-                                text = downloadProgress.step,
-                                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                            Text(
-                                text = "${(downloadProgress.percent * 100).toInt()}%",
-                                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                        }
-
+                        Text(
+                            text = downloadProgress.step,
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 14.sp,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
                         Spacer(modifier = Modifier.height(8.dp))
-
                         LinearProgressIndicator(
                             progress = { downloadProgress.percent },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(6.dp)
-                                .clip(RoundedCornerShape(3.dp)),
+                            modifier = Modifier.fillMaxWidth(),
                             color = MaterialTheme.colorScheme.primary
                         )
-
-                        if (downloadProgress.currentSongTitle.isNotBlank()) {
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Text(
-                                text = downloadProgress.currentSongTitle,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurface,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-
-                        if (downloadProgress.error != null) {
-                            Spacer(modifier = Modifier.height(6.dp))
-                            Text(
-                                text = "Error: ${downloadProgress.error}",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = Color.Red
-                            )
-                        }
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "${(downloadProgress.percent * 100).toInt()}%",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
                     }
                 }
             }
         }
 
-        // Download History Section Header
+        // History Section
         item {
+            Spacer(modifier = Modifier.height(24.dp))
             Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        imageVector = Icons.Default.History,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(20.dp)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = "Historial de descargas (${downloadHistory.size})",
-                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
-                        color = MaterialTheme.colorScheme.onBackground
-                    )
-                }
-
                 Text(
-                    text = "songs_database.json",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    text = "Historial de Descargas (${downloadHistory.size})",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 16.sp
                 )
+                if (downloadHistory.isNotEmpty()) {
+                    IconButton(onClick = onClearHistory) {
+                        Icon(imageVector = Icons.Default.Delete, contentDescription = "Limpiar historial")
+                    }
+                }
             }
         }
 
-        // Download History Items
         if (downloadHistory.isEmpty()) {
             item {
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(vertical = 24.dp),
+                        .padding(vertical = 32.dp),
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
-                        text = "Aún no hay descargas en el historial.",
-                        style = MaterialTheme.typography.bodyMedium,
+                        text = "Aún no se ha descargado ninguna canción.",
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }
         } else {
-            items(downloadHistory) { item ->
+            items(downloadHistory, key = { it.id }) { item ->
                 Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(14.dp),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surface
-                    )
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 4.dp)
                 ) {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(14.dp),
+                            .padding(12.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Box(
-                            modifier = Modifier
-                                .size(36.dp)
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(Color(0xFF10B981).copy(alpha = 0.15f)),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.CheckCircle,
-                                contentDescription = null,
-                                tint = Color(0xFF10B981),
-                                modifier = Modifier.size(20.dp)
-                            )
-                        }
-
-                        Spacer(modifier = Modifier.width(12.dp))
-
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
                                 text = item.title,
-                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
-                                color = MaterialTheme.colorScheme.onSurface,
+                                fontWeight = FontWeight.Medium,
+                                fontSize = 14.sp,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
                             )
                             Text(
-                                text = "${item.id} • ${if (item.channel.isNotBlank()) item.channel else "YouTube"}",
-                                style = MaterialTheme.typography.bodySmall,
+                                text = item.channel.ifBlank { "YouTube" },
+                                fontSize = 12.sp,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                     }
                 }
             }
-        }
-
-        item {
-            Spacer(modifier = Modifier.height(80.dp))
         }
     }
 }

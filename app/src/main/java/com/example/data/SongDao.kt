@@ -16,7 +16,7 @@ interface SongDao {
     @Query("SELECT * FROM songs WHERE isFavorite = 1 ORDER BY title ASC")
     fun getFavoriteSongs(): Flow<List<Song>>
 
-    @Query("SELECT * FROM songs WHERE id = :id LIMIT 1")
+    @Query("SELECT * FROM songs WHERE id = :id")
     suspend fun getSongById(id: String): Song?
 
     @Query("SELECT * FROM songs WHERE youtubeVideoId = :videoId LIMIT 1")
@@ -40,7 +40,7 @@ interface SongDao {
     @Query("UPDATE songs SET isFavorite = :isFavorite WHERE id = :id")
     suspend fun setFavorite(id: String, isFavorite: Boolean)
 
-    @Query("UPDATE songs SET title = :title, artist = :artist, album = :album, coverArtUrl = :coverArtUrl, musicBrainzScore = :score, releaseId = :releaseId WHERE id = :id")
+    @Query("UPDATE songs SET title = :title, artist = :artist, album = :album, coverArtUrl = :coverArtUrl, enrichmentScore = :score, releaseId = :releaseId WHERE id = :id")
     suspend fun updateMetadata(
         id: String,
         title: String,
@@ -57,6 +57,6 @@ interface SongDao {
     @Query("SELECT SUM(fileSizeBytes) FROM songs")
     suspend fun getTotalStorageBytes(): Long?
 
-    @Query("UPDATE songs SET playCount = playCount + 1 WHERE id = :id")
-    suspend fun incrementPlayCount(id: String)
+    @Query("UPDATE songs SET playCount = playCount + 1, lastPlayedAt = :timestamp WHERE id = :id")
+    suspend fun incrementPlayCount(id: String, timestamp: Long = System.currentTimeMillis())
 }

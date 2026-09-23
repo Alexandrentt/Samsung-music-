@@ -15,7 +15,7 @@ import com.example.player.MusicPlaybackService
 class MusicAppWidgetProvider : AppWidgetProvider() {
 
     override fun onUpdate(context: Context, appWidgetManager: AppWidgetManager, appWidgetIds: IntArray) {
-        val player = AudioPlayerManager.instance
+        val player = AudioPlayerManager.getInstance()
         val song = player?.currentSong?.value
         val isPlaying = player?.isPlaying?.value ?: false
 
@@ -32,13 +32,13 @@ class MusicAppWidgetProvider : AppWidgetProvider() {
             try {
                 val appWidgetManager = AppWidgetManager.getInstance(context) ?: return
                 val componentName = ComponentName(context, MusicAppWidgetProvider::class.java)
-                val appWidgetIds = appWidgetManager.getAppWidgetIds(componentName)
-                if (appWidgetIds != null && appWidgetIds.isNotEmpty()) {
-                    for (id in appWidgetIds) {
-                        updateWidget(context, appWidgetManager, id, title, artist, isPlaying)
-                    }
+                val appWidgetIds = appWidgetManager.getAppWidgetIds(componentName) ?: return
+                for (id in appWidgetIds) {
+                    updateWidget(context, appWidgetManager, id, title, artist, isPlaying)
                 }
-            } catch (_: Exception) {}
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
         }
 
         private fun updateWidget(
@@ -50,7 +50,6 @@ class MusicAppWidgetProvider : AppWidgetProvider() {
             isPlaying: Boolean
         ) {
             val views = RemoteViews(context.packageName, R.layout.widget_music_player)
-
             views.setTextViewText(R.id.widget_song_title, title)
             views.setTextViewText(R.id.widget_song_artist, artist)
 
@@ -61,10 +60,7 @@ class MusicAppWidgetProvider : AppWidgetProvider() {
                 flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
             }
             val openPendingIntent = PendingIntent.getActivity(
-                context,
-                0,
-                openAppIntent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                context, 0, openAppIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
             views.setOnClickPendingIntent(R.id.widget_root, openPendingIntent)
             views.setOnClickPendingIntent(R.id.widget_info_container, openPendingIntent)
@@ -73,10 +69,7 @@ class MusicAppWidgetProvider : AppWidgetProvider() {
                 action = MusicPlaybackService.ACTION_PREV
             }
             val prevPendingIntent = PendingIntent.getService(
-                context,
-                11,
-                prevIntent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                context, 11, prevIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
             views.setOnClickPendingIntent(R.id.widget_btn_prev, prevPendingIntent)
 
@@ -84,10 +77,7 @@ class MusicAppWidgetProvider : AppWidgetProvider() {
                 action = MusicPlaybackService.ACTION_TOGGLE
             }
             val togglePendingIntent = PendingIntent.getService(
-                context,
-                12,
-                toggleIntent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                context, 12, toggleIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
             views.setOnClickPendingIntent(R.id.widget_btn_play_pause, togglePendingIntent)
 
@@ -95,10 +85,7 @@ class MusicAppWidgetProvider : AppWidgetProvider() {
                 action = MusicPlaybackService.ACTION_NEXT
             }
             val nextPendingIntent = PendingIntent.getService(
-                context,
-                13,
-                nextIntent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                context, 13, nextIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
             views.setOnClickPendingIntent(R.id.widget_btn_next, nextPendingIntent)
 

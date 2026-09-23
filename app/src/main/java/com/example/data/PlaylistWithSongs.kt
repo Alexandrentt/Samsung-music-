@@ -5,8 +5,7 @@ import androidx.room.Junction
 import androidx.room.Relation
 
 data class PlaylistWithSongs(
-    @Embedded
-    val playlist: Playlist,
+    @Embedded val playlist: Playlist,
     @Relation(
         parentColumn = "id",
         entityColumn = "id",

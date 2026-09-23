@@ -6,11 +6,17 @@ import androidx.room.Room
 import androidx.room.RoomDatabase
 
 @Database(
-    entities = [Song::class, DownloadHistoryItem::class, Playlist::class, PlaylistSongCrossRef::class],
-    version = 4,
+    entities = [
+        Song::class,
+        DownloadHistoryItem::class,
+        Playlist::class,
+        PlaylistSongCrossRef::class
+    ],
+    version = 1,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
+
     abstract fun songDao(): SongDao
     abstract fun downloadHistoryDao(): DownloadHistoryDao
     abstract fun playlistDao(): PlaylistDao
@@ -24,10 +30,10 @@ abstract class AppDatabase : RoomDatabase() {
                 val instance = Room.databaseBuilder(
                     context.applicationContext,
                     AppDatabase::class.java,
-                    "samsung_music_database"
+                    "samsung_music.db"
                 )
-                .fallbackToDestructiveMigration()
-                .build()
+                    .fallbackToDestructiveMigration()
+                    .build()
                 INSTANCE = instance
                 instance
             }
