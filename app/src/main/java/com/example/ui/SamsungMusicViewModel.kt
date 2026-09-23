@@ -63,6 +63,10 @@ class SamsungMusicViewModel(application: Application) : AndroidViewModel(applica
     private val _youtubeSearchResults = MutableStateFlow<List<MusicaEngine.PlaylistItem>>(emptyList())
     val youtubeSearchResults: StateFlow<List<MusicaEngine.PlaylistItem>> = _youtubeSearchResults.asStateFlow()
 
+    val rawSongs: StateFlow<List<Song>> = repository.allSongs.stateIn(
+        viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList()
+    )
+
     /**
      * Coincidencias en la biblioteca local (canciones ya descargadas) para la
      * consulta de búsqueda actual. Se muestran ANTES de los resultados de YouTube.
@@ -101,15 +105,11 @@ class SamsungMusicViewModel(application: Application) : AndroidViewModel(applica
     private val _songToAddToPlaylist = MutableStateFlow<Song?>(null)
     val songToAddToPlaylist: StateFlow<Song?> = _songToAddToPlaylist.asStateFlow()
 
-    private val _songSortOrder = MutableStateFlow(SongSortOrder.DEFAULT)
-    val songSortOrder: StateFlow<SongSortOrder> = _songSortOrder.asStateFlow()
-
     private val _songViewMode = MutableStateFlow(SongViewMode.LIST)
     val songViewMode: StateFlow<SongViewMode> = _songViewMode.asStateFlow()
 
-    val rawSongs: StateFlow<List<Song>> = repository.allSongs.stateIn(
-        viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList()
-    )
+    private val _songSortOrder = MutableStateFlow(SongSortOrder())
+    val songSortOrder: StateFlow<SongSortOrder> = _songSortOrder.asStateFlow()
 
     val favoriteSongs: StateFlow<List<Song>> = repository.favoriteSongs.stateIn(
         viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList()
