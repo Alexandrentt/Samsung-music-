@@ -39,6 +39,25 @@
                 android:resource="@xml/music_widget_info" />
         </receiver>
 
+        <receiver
+            android:name="com.example.widget.PlaylistWidgetProvider"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+                <action android:name="com.example.widget.action.REFRESH_PLAYLIST_WIDGET" />
+                <action android:name="com.example.widget.action.PLAY_ALL" />
+                <action android:name="com.example.widget.action.PLAY_SONG" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/playlist_widget_info" />
+        </receiver>
+
+        <service
+            android:name="com.example.widget.PlaylistWidgetService"
+            android:permission="android.permission.BIND_REMOTEVIEWS"
+            android:exported="false" />
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"

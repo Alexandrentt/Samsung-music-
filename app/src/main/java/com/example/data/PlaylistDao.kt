@@ -31,6 +31,10 @@ interface PlaylistDao {
     fun getAllPlaylistsWithSongs(): Flow<List<PlaylistWithSongs>>
 
     @Transaction
+    @Query("SELECT * FROM playlists ORDER BY name ASC")
+    suspend fun getAllPlaylistsWithSongsSnapshot(): List<PlaylistWithSongs>
+
+    @Transaction
     @Query("SELECT * FROM playlists WHERE id = :playlistId")
     fun getPlaylistWithSongs(playlistId: Long): Flow<PlaylistWithSongs>
 

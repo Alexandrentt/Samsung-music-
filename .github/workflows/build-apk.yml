@@ -1,0 +1,75 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Setup Gradle (with cache)
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Add gradlew wrapper (repo has no committed wrapper script)
+        run: |
+          if [ ! -f gradlew ]; then
+            gradle wrapper --gradle-version 9.3.1 --no-daemon
+          fi
+
+      - name: Build debug APK
+        run: gradle :app:assembleDebug --no-daemon
+
+      - name: Copy APK to repository root
+        run: |
+          mkdir -p apk
+          cp app/build/outputs/apk/debug/app-debug.apk samsung-music.apk
+          ls -la samsung-music.apk
+
+      - name: Commit APK to repository root
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add samsung-music.apk
+          if git diff --cached --quiet; then
+            echo "APK sin cambios, no hay nada que commitear."
+          else
+            git commit -m "build: actualizar samsung-music.apk [skip ci]"
+            git push
+          fi
+
+      - name: Delete in-progress release (if rerun)
+        run: |
+          VERSION="v$(date +'%Y.%m.%d')"
+          gh release delete "$VERSION" --yes --cleanup-tag 2>/dev/null || true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish APK to GitHub Releases
+        run: |
+          VERSION="v$(date +'%Y.%m.%d')"
+          gh release create "$VERSION" samsung-music.apk \
+            --title "Samsung Music $VERSION" \
+            --notes "APK debug generado automáticamente.
+
+          - Búsqueda unificada: biblioteca local primero, luego YouTube / YouTube Music
+          - Widget de lista de reproducción
+          - Barra de reproducción persistente y aleatorio real
+
+          Instala el APK permitiendo 'orígenes desconocidos' en tu dispositivo Android." \
+            --latest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

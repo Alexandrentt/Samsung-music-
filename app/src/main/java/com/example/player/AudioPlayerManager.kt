@@ -200,18 +200,13 @@ class AudioPlayerManager(private val context: Context) {
         val cur = _currentSong.value
         if (q.isEmpty()) return
 
-        val nextSong = if (_isShuffleEnabled.value) {
-            val otherSongs = q.filter { it.id != cur?.id }
-            if (otherSongs.isNotEmpty()) otherSongs.random() else q.first()
+        val idx = q.indexOfFirst { it.id == cur?.id }
+        val nextSong = if (idx != -1 && idx + 1 < q.size) {
+            q[idx + 1]
+        } else if (_repeatMode.value == RepeatMode.ALL) {
+            q.first()
         } else {
-            val idx = q.indexOfFirst { it.id == cur?.id }
-            if (idx != -1 && idx + 1 < q.size) {
-                q[idx + 1]
-            } else if (_repeatMode.value == RepeatMode.ALL) {
-                q.first()
-            } else {
-                null
-            }
+            null
         }
 
         if (nextSong != null) {
@@ -295,6 +290,18 @@ class AudioPlayerManager(private val context: Context) {
         }
     }
 
+    /**
+     * Reproducción aleatoria real: reemplaza la cola actual por una copia
+     * barajada de todas las canciones dadas y arranca por la primera,
+     * siempre desde el principio de la pista.
+     */
+    fun startShuffled(songs: List<Song>) {
+        if (songs.isEmpty()) return
+        val shuffled = songs.shuffled()
+        _isShuffleEnabled.value = true
+        playSong(shuffled.first(), shuffled)
+    }
+
     private fun startProgressTicker() {
         progressJob?.cancel()
         progressJob = scope.launch {
@@ -315,7 +322,11 @@ class AudioPlayerManager(private val context: Context) {
                 }
 
                 if (pos >= dur && dur > 0) {
-                    handleSongCompletion()
+                    // Solo para reproducción sintética (sin MediaPlayer real):
+                    // con MediaPlayer real el avance lo gestiona onCompletion.
+                    if (mediaPlayer == null) {
+                        handleSongCompletion()
+                    }
                     break
                 }
 

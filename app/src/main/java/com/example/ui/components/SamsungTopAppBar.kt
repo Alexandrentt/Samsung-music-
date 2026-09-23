@@ -27,7 +27,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.sp
 import com.example.R
@@ -71,13 +70,8 @@ fun SamsungTopAppBar(
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                     keyboardActions = KeyboardActions(onSearch = { keyboardController?.hide() })
                 )
-            } else {
-                Text(
-                    text = "Samsung Music",
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 22.sp
-                )
             }
+            // Sin letrero: el título queda vacío cuando no hay búsqueda activa.
         },
         actions = {
             if (isSearchActive) {

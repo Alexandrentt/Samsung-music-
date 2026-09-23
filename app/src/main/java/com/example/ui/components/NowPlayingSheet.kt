@@ -1,6 +1,5 @@
 package com.example.ui.components
 
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -24,6 +23,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.Lyrics
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Repeat
 import androidx.compose.material.icons.filled.RepeatOne
@@ -50,6 +50,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
@@ -93,6 +94,7 @@ fun NowPlayingSheet(
     var sliderTempPosition by remember { mutableStateOf(0f) }
     var showLyricsView by remember { mutableStateOf(false) }
     val lyricsListState = rememberLazyListState()
+    val hasLyrics = lyrics.isNotEmpty()
 
     LaunchedEffect(activeLyricIndex, showLyricsView) {
         if (showLyricsView && activeLyricIndex >= 0 && activeLyricIndex < lyrics.size) {
@@ -128,7 +130,7 @@ fun NowPlayingSheet(
                 }
 
                 Text(
-                    text = "REPRODUCIENDO",
+                    text = if (showLyricsView) "LETRA" else "REPRODUCIENDO",
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Bold,
                     letterSpacing = 1.sp,
@@ -144,7 +146,7 @@ fun NowPlayingSheet(
                 }
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(12.dp))
 
             // Main Content: Album Art OR Lyrics
             if (!showLyricsView) {
@@ -152,9 +154,8 @@ fun NowPlayingSheet(
                     modifier = Modifier
                         .fillMaxWidth(0.85f)
                         .aspectRatio(1f)
-                        .clip(RoundedCornerShape(20.dp))
-                        .background(MaterialTheme.colorScheme.surfaceVariant)
-                        .clickable { if (lyrics.isNotEmpty()) showLyricsView = true },
+                        .clip(RoundedCornerShape(24.dp))
+                        .clickable(enabled = hasLyrics) { showLyricsView = true },
                     contentAlignment = Alignment.Center
                 ) {
                     AsyncImage(
@@ -163,19 +164,68 @@ fun NowPlayingSheet(
                         modifier = Modifier.fillMaxSize(),
                         contentScale = ContentScale.Crop
                     )
+
+                    // Tappable overlay hint: opens lyrics
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(
+                                Brush.verticalGradient(
+                                    colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.55f)),
+                                    startY = 520f
+                                )
+                            )
+                    )
+
+                    if (hasLyrics) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .align(Alignment.BottomCenter)
+                                .padding(bottom = 14.dp)
+                                .clip(RoundedCornerShape(50))
+                                .background(Color.Black.copy(alpha = 0.4f))
+                                .padding(horizontal = 14.dp, vertical = 7.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Lyrics,
+                                contentDescription = null,
+                                tint = Color.White,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "Ver letra",
+                                color = Color.White,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                    }
                 }
             } else {
                 Surface(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(300.dp)
-                        .clip(RoundedCornerShape(20.dp))
-                        .clickable { showLyricsView = false },
+                        .height(320.dp)
+                        .clip(RoundedCornerShape(24.dp)),
                     color = MaterialTheme.colorScheme.surfaceVariant
                 ) {
-                    if (lyrics.isEmpty()) {
+                    if (!hasLyrics) {
                         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            Text("No hay letras sincronizadas disponibles", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Icon(
+                                    imageVector = Icons.Default.Lyrics,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(32.dp)
+                                )
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Text(
+                                    "No hay letras sincronizadas disponibles",
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
                         }
                     } else {
                         LazyColumn(
@@ -204,7 +254,7 @@ fun NowPlayingSheet(
                 }
             }
 
-            Spacer(modifier = Modifier.height(20.dp))
+            Spacer(modifier = Modifier.height(18.dp))
 
             // Song Info & Favorite
             Row(
@@ -227,14 +277,14 @@ fun NowPlayingSheet(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
-                    if (currentSong.enrichmentScore > 0) {
-                        Text(
-                            text = "Calidad: ${currentSong.enrichmentScore}% • ${currentSong.album}",
-                            fontSize = 12.sp,
-                            color = MaterialTheme.colorScheme.primary,
-                            maxLines = 1
-                        )
-                    }
+                    // Álbum / fuente de metadatos (sin porcentajes ni "YouTube Downloads")
+                    Text(
+                        text = currentSong.album,
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.primary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
                 }
 
                 IconButton(onClick = { onToggleFavorite(currentSong) }) {
@@ -255,15 +305,26 @@ fun NowPlayingSheet(
                 Surface(
                     shape = RoundedCornerShape(12.dp),
                     color = if (showLyricsView) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
-                    modifier = Modifier.clickable { showLyricsView = !showLyricsView }
+                    modifier = Modifier.clickable(enabled = hasLyrics) { showLyricsView = !showLyricsView }
                 ) {
-                    Text(
-                        text = "LETRA",
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 11.sp,
-                        color = if (showLyricsView) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
-                    )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Lyrics,
+                            contentDescription = null,
+                            tint = if (showLyricsView) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = "LETRA",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 11.sp,
+                            color = if (showLyricsView) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
             }
 
@@ -306,7 +367,7 @@ fun NowPlayingSheet(
                 )
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(12.dp))
 
             // Playback Controls
             Row(

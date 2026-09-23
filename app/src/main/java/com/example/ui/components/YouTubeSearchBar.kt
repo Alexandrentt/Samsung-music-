@@ -1,8 +1,5 @@
 package com.example.ui.components
 
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -21,9 +18,11 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Language
+import androidx.compose.material.icons.filled.LibraryMusic
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
@@ -52,8 +51,15 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import com.example.R
+import com.example.data.Song
 import com.example.engine.MusicaEngine
 
+/**
+ * Búsqueda unificada: primero muestra las coincidencias descargadas en la
+ * biblioteca local (listas para reproducir) y debajo lo que regresa
+ * YouTube / YouTube Music (listas para descargar).
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun YouTubeSearchBar(
@@ -61,15 +67,18 @@ fun YouTubeSearchBar(
     onQueryChange: (String) -> Unit,
     onSearch: (String) -> Unit,
     isSearching: Boolean,
-    searchResults: List<MusicaEngine.PlaylistItem>,
+    localResults: List<Song>,
+    youtubeResults: List<MusicaEngine.PlaylistItem>,
+    onPlayLocalSong: (Song) -> Unit,
     onSelectPlaylistItem: (MusicaEngine.PlaylistItem) -> Unit,
     modifier: Modifier = Modifier,
-    placeholderText: String = "Buscar canciones, artistas o pegar URL..."
+    placeholderText: String = "Buscar en tu biblioteca y YouTube Music..."
 ) {
     var expanded by remember { mutableStateOf(false) }
     val keyboardController = LocalSoftwareKeyboardController.current
 
     val isUrl = query.contains("youtube.com") || query.contains("youtu.be")
+    val hasAnyResults = localResults.isNotEmpty() || youtubeResults.isNotEmpty()
 
     Box(modifier = modifier.fillMaxWidth()) {
         SearchBar(
@@ -152,7 +161,7 @@ fun YouTubeSearchBar(
                 .fillMaxWidth()
                 .testTag("youtube_search_bar")
         ) {
-            // Content inside the expanded search suggestions/results
+            // Contenido de la búsqueda expandida
             if (isSearching) {
                 Box(
                     modifier = Modifier
@@ -164,13 +173,13 @@ fun YouTubeSearchBar(
                         CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
                         Spacer(modifier = Modifier.height(12.dp))
                         Text(
-                            text = "Buscando en YouTube...",
+                            text = "Buscando en YouTube Music...",
                             fontSize = 14.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }
-            } else if (searchResults.isEmpty()) {
+            } else if (!hasAnyResults) {
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -201,13 +210,13 @@ fun YouTubeSearchBar(
                             )
                             Spacer(modifier = Modifier.height(4.dp))
                             Text(
-                                text = "Puedes buscar por canción, artista o ingresar URLs de YouTube / YouTube Music.",
+                                text = "Primero veremos si ya la tienes descargada; después buscamos en YouTube Music.",
                                 fontSize = 12.sp,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.padding(horizontal = 16.dp)
                             )
                             Spacer(modifier = Modifier.height(16.dp))
-                            // Suggestion pills
+                            // Sugerencias rápidas
                             val suggestions = listOf("Luis Miguel", "Queen", "Diego Verdaguer", "Boleros clásicos", "Rock en español")
                             Row(
                                 horizontalArrangement = Arrangement.Center,
@@ -234,10 +243,10 @@ fun YouTubeSearchBar(
                             }
                         } else {
                             Text(
-                                text = "Pulsa Enter para buscar \"$query\"",
+                                text = "Sin resultados para \"$query\"",
                                 fontWeight = FontWeight.Medium,
                                 fontSize = 14.sp,
-                                color = MaterialTheme.colorScheme.primary
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                     }
@@ -247,26 +256,154 @@ fun YouTubeSearchBar(
                     contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    item {
-                        Text(
-                            text = "Resultados de YouTube (${searchResults.size})",
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                        )
+                    // ─── 1. Primero: lo que ya está descargado en la biblioteca ───
+                    if (localResults.isNotEmpty()) {
+                        item {
+                            ResultSectionHeader(
+                                icon = { Icon(
+                                    imageVector = Icons.Default.LibraryMusic,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(14.dp)
+                                ) },
+                                text = "En tu biblioteca (${localResults.size})"
+                            )
+                        }
+
+                        items(localResults, key = { "local_${it.id}" }) { song ->
+                            LocalSongResultItem(
+                                song = song,
+                                onClick = {
+                                    expanded = false
+                                    onPlayLocalSong(song)
+                                }
+                            )
+                        }
                     }
 
-                    items(searchResults, key = { it.videoId }) { item ->
-                        YouTubeSearchResultItem(
-                            item = item,
-                            onClick = {
-                                expanded = false
-                                onSelectPlaylistItem(item)
-                            }
-                        )
+                    // ─── 2. Después: resultados de YouTube / YouTube Music ───
+                    if (youtubeResults.isNotEmpty()) {
+                        item {
+                            ResultSectionHeader(
+                                icon = { Icon(
+                                    imageVector = Icons.Default.Download,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(14.dp)
+                                ) },
+                                text = "En YouTube (${youtubeResults.size})"
+                            )
+                        }
+
+                        items(youtubeResults, key = { it.videoId }) { item ->
+                            YouTubeSearchResultItem(
+                                item = item,
+                                onClick = {
+                                    expanded = false
+                                    onSelectPlaylistItem(item)
+                                }
+                            )
+                        }
                     }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ResultSectionHeader(
+    icon: @Composable () -> Unit,
+    text: String
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 8.dp, vertical = 4.dp)
+    ) {
+        icon()
+        Spacer(modifier = Modifier.width(6.dp))
+        Text(
+            text = text,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.primary
+        )
+    }
+}
+
+/** Fila de canción ya descargada: se reproduce directamente. */
+@Composable
+fun LocalSongResultItem(
+    song: Song,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f),
+        modifier = modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .testTag("local_result_${song.id}")
+    ) {
+        Row(
+            modifier = Modifier
+                .padding(8.dp)
+                .fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            AsyncImage(
+                model = song.coverArtUrl ?: R.drawable.ic_launcher_foreground,
+                contentDescription = song.title,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier
+                    .size(54.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant)
+            )
+
+            Spacer(modifier = Modifier.width(12.dp))
+
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.Center
+            ) {
+                Text(
+                    text = song.title,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 14.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Spacer(modifier = Modifier.height(2.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.CheckCircle,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(13.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = "Descargada • ${song.artist}",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.width(8.dp))
+
+            IconButton(onClick = onClick) {
+                Icon(
+                    imageVector = Icons.Default.PlayArrow,
+                    contentDescription = "Reproducir",
+                    tint = MaterialTheme.colorScheme.primary
+                )
             }
         }
     }

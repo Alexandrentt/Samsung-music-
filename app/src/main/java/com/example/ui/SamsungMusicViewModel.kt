@@ -20,6 +20,7 @@ import com.example.player.AudioPlayerManager
 import com.example.player.RepeatMode
 import com.example.worker.PlaylistSyncWorker
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -62,6 +63,26 @@ class SamsungMusicViewModel(application: Application) : AndroidViewModel(applica
     private val _youtubeSearchResults = MutableStateFlow<List<MusicaEngine.PlaylistItem>>(emptyList())
     val youtubeSearchResults: StateFlow<List<MusicaEngine.PlaylistItem>> = _youtubeSearchResults.asStateFlow()
 
+    /**
+     * Coincidencias en la biblioteca local (canciones ya descargadas) para la
+     * consulta de búsqueda actual. Se muestran ANTES de los resultados de YouTube.
+     */
+    val localSearchResults: StateFlow<List<Song>> = combine(
+        rawSongs,
+        _youtubeSearchQuery
+    ) { songs, query ->
+        val q = query.trim().lowercase()
+        if (q.isBlank() || q.contains("youtube.com") || q.contains("youtu.be")) {
+            emptyList()
+        } else {
+            songs.filter {
+                it.title.lowercase().contains(q) ||
+                        it.artist.lowercase().contains(q) ||
+                        it.album.lowercase().contains(q)
+            }.take(10)
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
     private val _statsDialogData = MutableStateFlow<MusicStatistics?>(null)
     val statsDialogData: StateFlow<MusicStatistics?> = _statsDialogData.asStateFlow()
 
@@ -80,7 +101,7 @@ class SamsungMusicViewModel(application: Application) : AndroidViewModel(applica
     private val _songToAddToPlaylist = MutableStateFlow<Song?>(null)
     val songToAddToPlaylist: StateFlow<Song?> = _songToAddToPlaylist.asStateFlow()
 
-    private val _songSortOrder = MutableStateFlow(SongSortOrder.TITLE_ASC)
+    private val _songSortOrder = MutableStateFlow(SongSortOrder.DEFAULT)
     val songSortOrder: StateFlow<SongSortOrder> = _songSortOrder.asStateFlow()
 
     private val _songViewMode = MutableStateFlow(SongViewMode.LIST)
@@ -121,42 +142,7 @@ class SamsungMusicViewModel(application: Application) : AndroidViewModel(applica
                         it.album.lowercase().contains(q)
             }
         }
-        when (sortOrder) {
-            SongSortOrder.TITLE_ASC -> filtered.sortedBy { it.title.lowercase() }
-            SongSortOrder.ARTIST_ASC -> filtered.sortedBy { it.artist.lowercase() }
-            SongSortOrder.DATE_ADDED_DESC -> filtered.sortedByDescending { it.dateAdded }
-        }
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
-
-    val albums: StateFlow<List<AlbumItem>> = rawSongs.combine(_searchQuery) { songs, query ->
-        songs.groupBy { it.album }
-            .map { (albumName, albumSongs) ->
-                AlbumItem(
-                    name = albumName,
-                    artist = albumSongs.firstOrNull()?.artist ?: "Varios Artistas",
-                    songs = albumSongs,
-                    coverArtUrl = albumSongs.firstOrNull()?.coverArtUrl
-                )
-            }
-            .filter {
-                query.isBlank() || it.name.lowercase().contains(query.lowercase()) || it.artist.lowercase().contains(query.lowercase())
-            }
-            .sortedBy { it.name.lowercase() }
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
-
-    val artists: StateFlow<List<ArtistItem>> = rawSongs.combine(_searchQuery) { songs, query ->
-        songs.groupBy { it.artist }
-            .map { (artistName, artistSongs) ->
-                ArtistItem(
-                    name = artistName,
-                    songs = artistSongs,
-                    coverArtUrl = artistSongs.firstOrNull()?.coverArtUrl
-                )
-            }
-            .filter {
-                query.isBlank() || it.name.lowercase().contains(query.lowercase())
-            }
-            .sortedBy { it.name.lowercase() }
+        filtered.sortedWith(sortOrder.comparator())
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     init {
@@ -167,6 +153,68 @@ class SamsungMusicViewModel(application: Application) : AndroidViewModel(applica
         }
         viewModelScope.launch {
             seedInitialMusic()
+        }
+        autoEnrichExistingSongs()
+        observePlaylistForWidget()
+    }
+
+    /**
+     * Refresca el widget de lista de reproducción cuando cambian los datos.
+     * El widget muestra la playlist seleccionada (o la primera con canciones).
+     */
+    private fun observePlaylistForWidget() {
+        viewModelScope.launch(Dispatchers.IO) {
+            repository.allPlaylistsWithSongs.collect { playlists ->
+                com.example.widget.PlaylistWidgetProvider.refreshAll(getApplication())
+            }
+        }
+    }
+
+    /**
+     * Al arrancar, completa los metadatos de las canciones existentes usando
+     * MusicBrainz (solo las que aún no tienen una puntuación de enriquecimiento alta).
+     */
+    private fun autoEnrichExistingSongs() {
+        viewModelScope.launch(Dispatchers.IO) {
+            // Espera (hasta ~60 s) a que la biblioteca se cargue por primera vez.
+            var songs = rawSongs.value
+            var waitedMs = 0
+            while (songs.isEmpty() && waitedMs < 60_000) {
+                delay(1_000)
+                waitedMs += 1_000
+                songs = rawSongs.value
+            }
+            if (songs.isEmpty()) return@launch
+
+            val pending = songs.filter { it.enrichmentScore < 70 || it.album == "YouTube Downloads" }
+            if (pending.isEmpty()) return@launch
+
+            val total = pending.size
+            pending.forEachIndexed { index, song ->
+                _enrichProgress.value = Pair(index + 1, total)
+                val result = engine.buscarMusicBrainz(song.artist, song.title)
+                    // Para canciones de YouTube sin enriquecer, el artista puede ser
+                    // el nombre del canal: reintenta solo con el título.
+                    ?: if (song.album == "YouTube Downloads") {
+                        engine.buscarMusicBrainz("", song.title)
+                    } else {
+                        null
+                    }
+                if (result != null) {
+                    repository.updateMetadata(
+                        id = song.id,
+                        title = result.title,
+                        artist = result.artist,
+                        album = result.album,
+                        coverArtUrl = result.coverArtUrl ?: song.coverArtUrl,
+                        score = result.score,
+                        releaseId = result.releaseId
+                    )
+                }
+                // Cortesía con la API pública de MusicBrainz (~1 req/seg).
+                delay(1_100)
+            }
+            _enrichProgress.value = null
         }
     }
 
@@ -212,6 +260,10 @@ class SamsungMusicViewModel(application: Application) : AndroidViewModel(applica
         _songSortOrder.value = order
     }
 
+    fun toggleSongSortDirection() {
+        _songSortOrder.value = _songSortOrder.value.copy(ascending = !_songSortOrder.value.ascending)
+    }
+
     fun toggleSongViewMode() {
         _songViewMode.value = if (_songViewMode.value == SongViewMode.LIST) SongViewMode.GRID else SongViewMode.LIST
     }
@@ -222,6 +274,15 @@ class SamsungMusicViewModel(application: Application) : AndroidViewModel(applica
 
     fun playSong(song: Song, queue: List<Song>? = null) {
         playerManager.playSong(song, queue ?: filteredSongs.value)
+    }
+
+    /**
+     * Reproducción aleatoria real: construye una cola barajada con todas las
+     * canciones indicadas y comienza por la primera de ellas desde el inicio.
+     */
+    fun playAllShuffled(songs: List<Song>) {
+        if (songs.isEmpty()) return
+        playerManager.startShuffled(songs)
     }
 
     fun toggleFavorite(song: Song) {
@@ -452,6 +513,16 @@ class SamsungMusicViewModel(application: Application) : AndroidViewModel(applica
     fun downloadPlaylistItem(item: MusicaEngine.PlaylistItem, autoEnrich: Boolean = false) {
         val url = "https://www.youtube.com/watch?v=${item.videoId}"
         downloadFromUrl(url, autoEnrich = autoEnrich)
+    }
+
+    /** Reproduce una coincidencia local desde la búsqueda unificada. */
+    fun playLocalSearchResult(song: Song) {
+        val queue = if (localSearchResults.value.size > 1) {
+            localSearchResults.value
+        } else {
+            filteredSongs.value
+        }
+        playerManager.playSong(song, queue)
     }
 
     fun enrichAllSongs(force: Boolean = false) {

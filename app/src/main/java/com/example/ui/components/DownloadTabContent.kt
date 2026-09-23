@@ -13,12 +13,15 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Error
+import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -29,8 +32,10 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -38,13 +43,18 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.DownloadHistoryItem
+import com.example.data.Song
 import com.example.engine.DownloadProgress
 import com.example.engine.MusicaEngine
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 @Composable
 fun DownloadTabContent(
@@ -53,15 +63,18 @@ fun DownloadTabContent(
     downloadHistory: List<DownloadHistoryItem>,
     youtubeSearchQuery: String,
     isSearchingYouTube: Boolean,
+    localSearchResults: List<Song>,
     youtubeSearchResults: List<MusicaEngine.PlaylistItem>,
     onYouTubeSearchQueryChange: (String) -> Unit,
     onSearchYouTube: (String) -> Unit,
+    onPlayLocalSearchResult: (Song) -> Unit,
     onSelectPlaylistItem: (MusicaEngine.PlaylistItem) -> Unit,
     onDownloadUrl: (String, Boolean) -> Unit,
     onClearHistory: () -> Unit
 ) {
     var urlInput by remember { mutableStateOf("") }
     var autoEnrich by remember { mutableStateOf(true) }
+    var showClearConfirm by remember { mutableStateOf(false) }
 
     LazyColumn(
         modifier = Modifier
@@ -75,13 +88,23 @@ fun DownloadTabContent(
                 onQueryChange = onYouTubeSearchQueryChange,
                 onSearch = onSearchYouTube,
                 isSearching = isSearchingYouTube,
-                searchResults = youtubeSearchResults,
+                localResults = localSearchResults,
+                youtubeResults = youtubeSearchResults,
+                onPlayLocalSong = onPlayLocalSearchResult,
                 onSelectPlaylistItem = { item ->
                     urlInput = "https://www.youtube.com/watch?v=${item.videoId}"
                     onSelectPlaylistItem(item)
                 },
                 modifier = Modifier.padding(bottom = 16.dp)
             )
+        }
+
+        // Active Download Progress Card (sticky at top of the list for visibility)
+        if (downloadProgress != null) {
+            item {
+                DownloadStatusCard(downloadProgress)
+                Spacer(modifier = Modifier.height(16.dp))
+            }
         }
 
         item {
@@ -97,7 +120,7 @@ fun DownloadTabContent(
                         fontSize = 18.sp
                     )
                     Text(
-                        text = "Introduce el enlace de YouTube de una canción o lista de reproducción.",
+                        text = "Pega el enlace de una canción o lista de YouTube, o busca directamente.",
                         fontSize = 13.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -127,7 +150,7 @@ fun DownloadTabContent(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Column {
+                        Column(modifier = Modifier.weight(1f)) {
                             Text("Enriquecer con MusicBrainz", fontSize = 14.sp, fontWeight = FontWeight.Medium)
                             Text("Obtiene carátula en HD, álbum y etiquetas", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
@@ -168,43 +191,10 @@ fun DownloadTabContent(
                             },
                             enabled = !isDownloading
                         ) {
-                            Icon(imageVector = Icons.Default.Refresh, contentDescription = null)
+                            Icon(imageVector = Icons.Default.Sync, contentDescription = null)
                             Spacer(modifier = Modifier.width(6.dp))
                             Text("Sincronizar Lista")
                         }
-                    }
-                }
-            }
-        }
-
-        // Active Download Progress Card
-        if (downloadProgress != null && !downloadProgress.isFinished) {
-            item {
-                Spacer(modifier = Modifier.height(16.dp))
-                Card(
-                    shape = RoundedCornerShape(16.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Text(
-                            text = downloadProgress.step,
-                            fontWeight = FontWeight.SemiBold,
-                            fontSize = 14.sp,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        LinearProgressIndicator(
-                            progress = { downloadProgress.percent },
-                            modifier = Modifier.fillMaxWidth(),
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = "${(downloadProgress.percent * 100).toInt()}%",
-                            fontSize = 12.sp,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer
-                        )
                     }
                 }
             }
@@ -224,8 +214,15 @@ fun DownloadTabContent(
                     fontSize = 16.sp
                 )
                 if (downloadHistory.isNotEmpty()) {
-                    IconButton(onClick = onClearHistory) {
-                        Icon(imageVector = Icons.Default.Delete, contentDescription = "Limpiar historial")
+                    TextButton(onClick = { showClearConfirm = true }) {
+                        Icon(
+                            imageVector = Icons.Default.Delete,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Limpiar", color = MaterialTheme.colorScheme.error, fontSize = 13.sp)
                     }
                 }
             }
@@ -239,10 +236,19 @@ fun DownloadTabContent(
                         .padding(vertical = 32.dp),
                     contentAlignment = Alignment.Center
                 ) {
-                    Text(
-                        text = "Aún no se ha descargado ninguna canción.",
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(
+                            imageVector = Icons.Default.CloudDownload,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                            modifier = Modifier.size(40.dp)
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = "Aún no se ha descargado ninguna canción.",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
             }
         } else {
@@ -260,6 +266,23 @@ fun DownloadTabContent(
                             .padding(12.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
+                        Surface(
+                            shape = CircleShape,
+                            color = MaterialTheme.colorScheme.primaryContainer,
+                            modifier = Modifier.size(36.dp)
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = Icons.Default.CheckCircle,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.width(12.dp))
+
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
                                 text = item.title,
@@ -269,14 +292,171 @@ fun DownloadTabContent(
                                 overflow = TextOverflow.Ellipsis
                             )
                             Text(
-                                text = item.channel.ifBlank { "YouTube" },
+                                text = buildString {
+                                    append(item.channel.ifBlank { "YouTube" })
+                                    if (item.downloadedAt > 0) {
+                                        append(" • ")
+                                        append(formatDate(item.downloadedAt))
+                                    }
+                                },
                                 fontSize = 12.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
                         }
                     }
                 }
             }
         }
+    }
+
+    if (showClearConfirm) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { showClearConfirm = false },
+            title = { Text("¿Limpiar historial?") },
+            text = { Text("Se eliminarán los ${downloadHistory.size} registros del historial de descargas. Las canciones descargadas no se borrarán.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    onClearHistory()
+                    showClearConfirm = false
+                }) {
+                    Text("Limpiar", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showClearConfirm = false }) {
+                    Text("Cancelar")
+                }
+            }
+        )
+    }
+}
+
+@Composable
+private fun DownloadStatusCard(progress: DownloadProgress) {
+    val isDone = progress.isFinished
+    val hasError = progress.error != null
+
+    Card(
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = when {
+                hasError -> MaterialTheme.colorScheme.errorContainer
+                isDone -> MaterialTheme.colorScheme.tertiaryContainer
+                else -> MaterialTheme.colorScheme.primaryContainer
+            }
+        ),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = when {
+                        hasError -> Icons.Default.Error
+                        isDone -> Icons.Default.CheckCircle
+                        else -> Icons.Default.CloudDownload
+                    },
+                    contentDescription = null,
+                    tint = when {
+                        hasError -> MaterialTheme.colorScheme.onErrorContainer
+                        isDone -> MaterialTheme.colorScheme.onTertiaryContainer
+                        else -> MaterialTheme.colorScheme.onPrimaryContainer
+                    },
+                    modifier = Modifier.size(20.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = when {
+                            hasError -> "Error en la descarga"
+                            isDone -> "Descarga completada"
+                            else -> "Descargando…"
+                        },
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 14.sp,
+                        color = when {
+                            hasError -> MaterialTheme.colorScheme.onErrorContainer
+                            isDone -> MaterialTheme.colorScheme.onTertiaryContainer
+                            else -> MaterialTheme.colorScheme.onPrimaryContainer
+                        }
+                    )
+                }
+                if (!isDone && !hasError) {
+                    Text(
+                        text = "${(progress.percent * 100).toInt()}%",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 14.sp,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            if (progress.currentSongTitle.isNotBlank()) {
+                Text(
+                    text = progress.currentSongTitle,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    color = when {
+                        hasError -> MaterialTheme.colorScheme.onErrorContainer
+                        isDone -> MaterialTheme.colorScheme.onTertiaryContainer
+                        else -> MaterialTheme.colorScheme.onPrimaryContainer
+                    }
+                )
+            }
+
+            val total = progress.totalItems
+            if (total > 1) {
+                Text(
+                    text = "Canción ${progress.currentItemIndex} de $total",
+                    fontSize = 12.sp,
+                    color = when {
+                        hasError -> MaterialTheme.colorScheme.onErrorContainer
+                        isDone -> MaterialTheme.colorScheme.onTertiaryContainer
+                        else -> MaterialTheme.colorScheme.onPrimaryContainer
+                    }.copy(alpha = 0.8f)
+                )
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            if (hasError) {
+                Text(
+                    text = progress.error ?: "Error desconocido",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onErrorContainer
+                )
+            } else if (!isDone) {
+                LinearProgressIndicator(
+                    progress = { progress.percent.coerceIn(0f, 1f) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(6.dp)
+                        .clip(RoundedCornerShape(3.dp)),
+                    color = MaterialTheme.colorScheme.primary,
+                    trackColor = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.15f)
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = progress.step,
+                    fontSize = 12.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.85f)
+                )
+            }
+        }
+    }
+}
+
+private fun formatDate(timestamp: Long): String {
+    return try {
+        SimpleDateFormat("d MMM, HH:mm", Locale("es")).format(Date(timestamp))
+    } catch (e: Exception) {
+        ""
     }
 }
