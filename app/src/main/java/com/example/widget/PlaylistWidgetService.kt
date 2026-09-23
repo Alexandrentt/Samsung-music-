@@ -3,6 +3,7 @@ package com.example.widget
 import android.content.Context
 import android.content.Intent
 import android.os.Binder
+import android.appwidget.AppWidgetManager
 import android.widget.RemoteViews
 import android.widget.RemoteViewsService
 import com.example.R
@@ -15,15 +16,10 @@ import com.example.data.Song
  */
 class PlaylistWidgetService : RemoteViewsService() {
 
-    companion object {
-        const val ACTION_PLAY_ALL = "com.example.widget.action.PLAY_ALL"
-        const val ACTION_PLAY_SONG = "com.example.widget.action.PLAY_SONG"
-    }
-
     override fun onGetViewFactory(intent: Intent): RemoteViewsFactory {
         val widgetId = intent.getIntExtra(
-            AppWidgetManager_EXTRA_APPWIDGET_ID,
-            android.appwidget.AppWidgetManager.INVALID_APPWIDGET_ID
+            AppWidgetManager.EXTRA_APPWIDGET_ID,
+            AppWidgetManager.INVALID_APPWIDGET_ID
         )
         return PlaylistWidgetFactory(applicationContext, widgetId)
     }
@@ -45,7 +41,9 @@ class PlaylistWidgetService : RemoteViewsService() {
             // Permitir consultas de Room en el hilo del widget (permiso temporal).
             val identityToken = Binder.clearCallingIdentity()
             try {
-                val playlists = db.playlistDao().getAllPlaylistsWithSongsSnapshot()
+                val playlists = kotlinx.coroutines.runBlocking {
+                    db.playlistDao().getAllPlaylistsWithSongsSnapshot()
+                }
                 val target = playlists.firstOrNull { it.songs.isNotEmpty() }
                 if (target != null) {
                     playlistName = target.playlist.name
@@ -87,9 +85,5 @@ class PlaylistWidgetService : RemoteViewsService() {
         override fun getItemId(position: Int): Long = position.toLong()
 
         override fun hasStableIds(): Boolean = false
-
-        companion object {
-            const val AppWidgetManager_EXTRA_APPWIDGET_ID = "appWidgetId"
-        }
     }
 }
