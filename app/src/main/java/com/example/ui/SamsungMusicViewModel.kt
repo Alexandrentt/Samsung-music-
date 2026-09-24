@@ -108,6 +108,42 @@ class SamsungMusicViewModel(application: Application) : AndroidViewModel(applica
     private val _songViewMode = MutableStateFlow(SongViewMode.LIST)
     val songViewMode: StateFlow<SongViewMode> = _songViewMode.asStateFlow()
 
+    private val prefs = application.getSharedPreferences("samsung_music_order_prefs", Context.MODE_PRIVATE)
+
+    private val _customOrderList = MutableStateFlow<List<String>>(loadCustomOrder())
+    val customOrderList: StateFlow<List<String>> = _customOrderList.asStateFlow()
+
+    private fun loadCustomOrder(): List<String> {
+        val raw = prefs.getString("custom_order_ids", "") ?: ""
+        return if (raw.isBlank()) emptyList() else raw.split(",").filter { it.isNotBlank() }
+    }
+
+    private fun saveCustomOrder(list: List<String>) {
+        _customOrderList.value = list
+        prefs.edit().putString("custom_order_ids", list.joinToString(",")).apply()
+    }
+
+    fun moveSong(songId: String, offset: Int) {
+        val currentDisplaySongs = filteredSongs.value
+        val currentIds = currentDisplaySongs.map { it.id }.toMutableList()
+        val index = currentIds.indexOf(songId)
+        if (index == -1) return
+
+        val targetIndex = when (offset) {
+            -9999 -> 0
+            9999 -> currentIds.lastIndex
+            else -> (index + offset).coerceIn(0, currentIds.lastIndex)
+        }
+
+        if (index != targetIndex) {
+            val item = currentIds.removeAt(index)
+            currentIds.add(targetIndex, item)
+            saveCustomOrder(currentIds)
+            _songSortOrder.value = SongSortOrder(field = SongSortField.CUSTOM, ascending = true)
+            showFeedbackToast("Orden personalizado actualizado")
+        }
+    }
+
     private val _songSortOrder = MutableStateFlow(SongSortOrder())
     val songSortOrder: StateFlow<SongSortOrder> = _songSortOrder.asStateFlow()
 
@@ -130,8 +166,9 @@ class SamsungMusicViewModel(application: Application) : AndroidViewModel(applica
     val filteredSongs: StateFlow<List<Song>> = combine(
         rawSongs,
         _searchQuery,
-        _songSortOrder
-    ) { songs, query, sortOrder ->
+        _songSortOrder,
+        _customOrderList
+    ) { songs, query, sortOrder, customList ->
         val filtered = if (query.isBlank()) {
             songs
         } else {
@@ -142,7 +179,8 @@ class SamsungMusicViewModel(application: Application) : AndroidViewModel(applica
                         it.album.lowercase().contains(q)
             }
         }
-        filtered.sortedWith(sortOrder.comparator())
+        val orderMap = customList.mapIndexed { idx, id -> id to idx }.toMap()
+        filtered.sortedWith(sortOrder.comparator(orderMap))
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     init {
@@ -152,10 +190,45 @@ class SamsungMusicViewModel(application: Application) : AndroidViewModel(applica
             }
         }
         viewModelScope.launch {
+            com.example.engine.MusicDownloadService.downloadProgress.collect { progress ->
+                if (progress != null) {
+                    _downloadProgress.value = progress
+                }
+            }
+        }
+        viewModelScope.launch {
+            com.example.engine.MusicDownloadService.isDownloading.collect { downloading ->
+                _isDownloading.value = downloading
+            }
+        }
+        viewModelScope.launch {
             seedInitialMusic()
         }
+        recoverExistingSongs()
         autoEnrichExistingSongs()
         observePlaylistForWidget()
+    }
+
+    /**
+     * Recupera canciones existentes guardadas en el almacenamiento compartido
+     * público (/Music/SamsungMusic) o interno para que NO se pierdan si el usuario
+     * desinstala y reinstala la aplicación.
+     */
+    private fun recoverExistingSongs() {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val recovered = engine.scanAndRecoverExistingSongs()
+                val existing = repository.allSongs.firstOrNull() ?: emptyList()
+                val existingIds = existing.map { it.id }.toSet()
+                for (song in recovered) {
+                    if (song.id !in existingIds) {
+                        repository.insertSong(song)
+                    }
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
     }
 
     /**
@@ -263,7 +336,7 @@ class SamsungMusicViewModel(application: Application) : AndroidViewModel(applica
 
         // If no songs yet, download the requested YouTube playlist
         if (currentSongsCount == 0) {
-            downloadFromUrl(MusicaEngine.PLAYLIST_URL_DEFAULT, autoEnrich = false)
+            downloadFromUrl(MusicaEngine.PLAYLIST_URL_DEFAULT, autoEnrich = false, showToast = false)
         }
     }
 
@@ -448,54 +521,23 @@ class SamsungMusicViewModel(application: Application) : AndroidViewModel(applica
     }
 
     private fun showFeedbackToast(msg: String) {
-        Toast.makeText(getApplication(), msg, Toast.LENGTH_SHORT).show()
+        android.os.Handler(android.os.Looper.getMainLooper()).post {
+            try {
+                Toast.makeText(getApplication(), msg, Toast.LENGTH_SHORT).show()
+            } catch (_: Exception) {}
+        }
     }
 
-    fun downloadFromUrl(url: String, autoEnrich: Boolean = false) {
-        if (_isDownloading.value) return
-        _isDownloading.value = true
-        viewModelScope.launch(Dispatchers.IO) {
-            try {
-                val currentPlaylists = repository.allPlaylists.firstOrNull() ?: emptyList()
-                val targetPlaylistId = currentPlaylists.firstOrNull()?.id ?: repository.createPlaylist(
-                    name = "Mi Playlist",
-                    description = "Sincronizada diariamente desde YouTube",
-                    coverArtUrl = null
-                )
-
-                engine.descargarDesdeUrl(
-                    url = url,
-                    autoEnriquecer = autoEnrich,
-                    isAlreadyDownloaded = { videoId ->
-                        val songId = "yt_$videoId"
-                        val song = repository.getSongById(songId)
-                        val exists = song != null && File(song.filePath).exists() && File(song.filePath).length() > 0
-                        if (exists) {
-                            if (!repository.isSongInPlaylist(targetPlaylistId, songId)) {
-                                repository.addSongToPlaylist(targetPlaylistId, songId)
-                            }
-                        }
-                        exists
-                    },
-                    onSongSaved = { song ->
-                        repository.insertSong(song)
-                        repository.recordDownload(song.youtubeVideoId ?: song.id, song.title, song.artist, song.filePath)
-                        repository.addSongToPlaylist(targetPlaylistId, song.id)
-                    },
-                    onProgress = { progress ->
-                        _downloadProgress.value = progress
-                    }
-                )
-            } catch (e: Exception) {
-                _downloadProgress.value = DownloadProgress(
-                    step = "Error en la descarga",
-                    percent = 1.0f,
-                    isFinished = true,
-                    error = e.localizedMessage
-                )
-            } finally {
-                _isDownloading.value = false
+    fun downloadFromUrl(url: String, autoEnrich: Boolean = false, showToast: Boolean = true) {
+        if (_isDownloading.value) {
+            if (showToast) {
+                showFeedbackToast("Ya hay una descarga en proceso")
             }
+            return
+        }
+        com.example.engine.MusicDownloadService.startDownload(getApplication(), url, autoEnrich)
+        if (showToast) {
+            showFeedbackToast("Descarga iniciada en segundo plano con notificación activa")
         }
     }
 

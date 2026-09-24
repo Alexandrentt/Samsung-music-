@@ -7,6 +7,7 @@ import com.example.data.Song
  * en orden ascendente o descendente (ver [ascending]).
  */
 enum class SongSortField(val displayName: String) {
+    CUSTOM("Personalizado"),
     TITLE("Título"),
     ARTIST("Artista"),
     ALBUM("Álbum"),
@@ -22,9 +23,11 @@ data class SongSortOrder(
 
 /**
  * Devuelve un comparador según el campo y la dirección elegidos.
+ * En modo [SongSortField.CUSTOM], usa el mapa de posiciones personalizadas.
  */
-fun SongSortOrder.comparator(): Comparator<Song> {
+fun SongSortOrder.comparator(customOrderMap: Map<String, Int> = emptyMap()): Comparator<Song> {
     val base: Comparator<Song> = when (field) {
+        SongSortField.CUSTOM -> compareBy { customOrderMap[it.id] ?: Int.MAX_VALUE }
         SongSortField.TITLE -> compareBy { it.title.lowercase() }
         SongSortField.ARTIST -> compareBy({ it.artist.lowercase() }, { it.title.lowercase() })
         SongSortField.ALBUM -> compareBy({ it.album.lowercase() }, { it.title.lowercase() })

@@ -301,6 +301,15 @@ class AudioPlayerManager(private val context: Context) {
         _queue.value = _queue.value.filter { it.id != songId }
     }
 
+    fun reorderQueue(fromIndex: Int, toIndex: Int) {
+        val current = _queue.value.toMutableList()
+        if (fromIndex in current.indices && toIndex in current.indices && fromIndex != toIndex) {
+            val item = current.removeAt(fromIndex)
+            current.add(toIndex, item)
+            _queue.value = current
+        }
+    }
+
     private fun handleSongCompletion() {
         if (_repeatMode.value == RepeatMode.ONE) {
             _currentSong.value?.let { playSong(it) }

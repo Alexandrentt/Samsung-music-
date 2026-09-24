@@ -1,6 +1,7 @@
 package com.example.ui.components
 
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -11,9 +12,14 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowDownward
+import androidx.compose.material.icons.filled.ArrowUpward
+import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.VerticalAlignBottom
+import androidx.compose.material.icons.filled.VerticalAlignTop
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -38,6 +44,7 @@ import coil.compose.AsyncImage
 import com.example.R
 import com.example.data.Song
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun SongItemRow(
     song: Song,
@@ -47,17 +54,56 @@ fun SongItemRow(
     onToggleFavorite: () -> Unit,
     onPlayNext: () -> Unit,
     onAddToPlaylist: () -> Unit,
-    onDelete: () -> Unit
+    onDelete: () -> Unit,
+    onLongClick: (() -> Unit)? = null,
+    onMoveUp: (() -> Unit)? = null,
+    onMoveDown: (() -> Unit)? = null,
+    onMoveToTop: (() -> Unit)? = null,
+    onMoveToBottom: (() -> Unit)? = null,
+    showReorderControls: Boolean = false
 ) {
     var showMenu by remember { mutableStateOf(false) }
 
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable { onSongClick() }
+            .combinedClickable(
+                onClick = onSongClick,
+                onLongClick = onLongClick
+            )
             .padding(horizontal = 16.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
+        if (showReorderControls) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.padding(end = 8.dp)
+            ) {
+                IconButton(
+                    onClick = { onMoveUp?.invoke() },
+                    modifier = Modifier.size(24.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.ArrowUpward,
+                        contentDescription = "Subir en la lista",
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
+                IconButton(
+                    onClick = { onMoveDown?.invoke() },
+                    modifier = Modifier.size(24.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.ArrowDownward,
+                        contentDescription = "Bajar en la lista",
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
+            }
+        }
+
         AsyncImage(
             model = song.coverArtUrl ?: R.drawable.ic_launcher_foreground,
             contentDescription = song.title,
@@ -130,6 +176,40 @@ fun SongItemRow(
                         onAddToPlaylist()
                     }
                 )
+                if (onMoveUp != null || onMoveDown != null) {
+                    DropdownMenuItem(
+                        text = { Text("Subir posición") },
+                        leadingIcon = { Icon(Icons.Default.ArrowUpward, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                        onClick = {
+                            showMenu = false
+                            onMoveUp?.invoke()
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Bajar posición") },
+                        leadingIcon = { Icon(Icons.Default.ArrowDownward, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                        onClick = {
+                            showMenu = false
+                            onMoveDown?.invoke()
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Mover al inicio") },
+                        leadingIcon = { Icon(Icons.Default.VerticalAlignTop, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                        onClick = {
+                            showMenu = false
+                            onMoveToTop?.invoke()
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Mover al final") },
+                        leadingIcon = { Icon(Icons.Default.VerticalAlignBottom, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                        onClick = {
+                            showMenu = false
+                            onMoveToBottom?.invoke()
+                        }
+                    )
+                }
                 DropdownMenuItem(
                     text = { Text("Eliminar canción") },
                     onClick = {

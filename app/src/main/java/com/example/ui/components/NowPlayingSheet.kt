@@ -65,6 +65,14 @@ import com.example.data.Song
 import com.example.engine.LyricLine
 import com.example.player.RepeatMode
 
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.ArrowUpward
+import androidx.compose.material.icons.filled.ArrowDownward
+import androidx.compose.material.icons.automirrored.filled.QueueMusic
+import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material.icons.filled.MusicNote
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun NowPlayingSheet(
@@ -76,6 +84,7 @@ fun NowPlayingSheet(
     repeatMode: RepeatMode,
     lyrics: List<LyricLine>,
     activeLyricIndex: Int,
+    currentQueue: List<Song> = emptyList(),
     onDismiss: () -> Unit,
     onTogglePlayPause: () -> Unit,
     onSkipNext: () -> Unit,
@@ -85,7 +94,10 @@ fun NowPlayingSheet(
     onToggleShuffle: () -> Unit,
     onCycleRepeat: () -> Unit,
     onToggleFavorite: (Song) -> Unit,
-    onOpenSoundAlive: () -> Unit
+    onOpenSoundAlive: () -> Unit,
+    onSelectSongFromQueue: (Song) -> Unit = {},
+    onRemoveFromQueue: (String) -> Unit = {},
+    onReorderQueue: ((Int, Int) -> Unit)? = null
 ) {
     if (currentSong == null) return
 
@@ -93,12 +105,23 @@ fun NowPlayingSheet(
     var isDraggingSlider by remember { mutableStateOf(false) }
     var sliderTempPosition by remember { mutableStateOf(0f) }
     var showLyricsView by remember { mutableStateOf(false) }
+    var showQueueView by remember { mutableStateOf(false) }
     val lyricsListState = rememberLazyListState()
+    val queueListState = rememberLazyListState()
     val hasLyrics = lyrics.isNotEmpty()
 
     LaunchedEffect(activeLyricIndex, showLyricsView) {
         if (showLyricsView && activeLyricIndex >= 0 && activeLyricIndex < lyrics.size) {
             lyricsListState.animateScrollToItem((activeLyricIndex - 2).coerceAtLeast(0))
+        }
+    }
+
+    LaunchedEffect(showQueueView, currentSong) {
+        if (showQueueView && currentQueue.isNotEmpty()) {
+            val idx = currentQueue.indexOfFirst { it.id == currentSong.id }
+            if (idx >= 0) {
+                queueListState.animateScrollToItem((idx - 1).coerceAtLeast(0))
+            }
         }
     }
 
@@ -130,26 +153,203 @@ fun NowPlayingSheet(
                 }
 
                 Text(
-                    text = if (showLyricsView) "LETRA" else "REPRODUCIENDO",
+                    text = when {
+                        showQueueView -> "COLA DE REPRODUCCIÓN"
+                        showLyricsView -> "LETRA"
+                        else -> "REPRODUCIENDO"
+                    },
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Bold,
                     letterSpacing = 1.sp,
                     color = MaterialTheme.colorScheme.primary
                 )
 
-                IconButton(onClick = onOpenSoundAlive) {
-                    Icon(
-                        painter = painterResource(id = R.drawable.ic_equalizer),
-                        contentDescription = "SoundAlive",
-                        tint = MaterialTheme.colorScheme.onBackground
-                    )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    // Botón para ver lista de reproducción actual
+                    IconButton(onClick = {
+                        showQueueView = !showQueueView
+                        if (showQueueView) showLyricsView = false
+                    }) {
+                        Icon(
+                            painter = painterResource(id = R.drawable.ic_playlist),
+                            contentDescription = "Ver lista de reproducción actual",
+                            tint = if (showQueueView) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onBackground,
+                            modifier = Modifier.size(24.dp)
+                        )
+                    }
+
+                    IconButton(onClick = onOpenSoundAlive) {
+                        Icon(
+                            painter = painterResource(id = R.drawable.ic_equalizer),
+                            contentDescription = "SoundAlive",
+                            tint = MaterialTheme.colorScheme.onBackground
+                        )
+                    }
                 }
             }
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            // Main Content: Album Art OR Lyrics
-            if (!showLyricsView) {
+            // Main Content: Album Art OR Lyrics OR Queue
+            if (showQueueView) {
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f, fill = false)
+                        .height(320.dp)
+                        .clip(RoundedCornerShape(24.dp)),
+                    color = MaterialTheme.colorScheme.surfaceVariant
+                ) {
+                    Column(modifier = Modifier.fillMaxSize().padding(12.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "${currentQueue.size} canciones en cola",
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f),
+                                modifier = Modifier.clickable { showQueueView = false }
+                            ) {
+                                Text(
+                                    text = "Cerrar",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                                )
+                            }
+                        }
+
+                        if (currentQueue.isEmpty()) {
+                            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                Text(
+                                    text = "La cola de reproducción está vacía",
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        } else {
+                            LazyColumn(
+                                state = queueListState,
+                                modifier = Modifier.fillMaxSize()
+                            ) {
+                                itemsIndexed(currentQueue, key = { index, song -> "${song.id}_$index" }) { index, song ->
+                                    val isCurrent = song.id == currentSong.id
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clip(RoundedCornerShape(12.dp))
+                                            .background(
+                                                if (isCurrent) MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
+                                                else Color.Transparent
+                                            )
+                                            .clickable {
+                                                onSelectSongFromQueue(song)
+                                            }
+                                            .padding(horizontal = 8.dp, vertical = 6.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        if (isCurrent) {
+                                            Icon(
+                                                imageVector = Icons.Default.GraphicEq,
+                                                contentDescription = "Reproduciendo ahora",
+                                                tint = MaterialTheme.colorScheme.primary,
+                                                modifier = Modifier.size(20.dp).padding(end = 4.dp)
+                                            )
+                                        } else {
+                                            Text(
+                                                text = "${index + 1}",
+                                                fontSize = 12.sp,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                                                modifier = Modifier.width(20.dp)
+                                            )
+                                        }
+
+                                        AsyncImage(
+                                            model = song.coverArtUrl ?: R.drawable.ic_launcher_foreground,
+                                            contentDescription = null,
+                                            modifier = Modifier
+                                                .size(38.dp)
+                                                .clip(RoundedCornerShape(6.dp)),
+                                            contentScale = ContentScale.Crop
+                                        )
+
+                                        Spacer(modifier = Modifier.width(10.dp))
+
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                text = song.title,
+                                                fontSize = 13.sp,
+                                                fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Medium,
+                                                color = if (isCurrent) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                            Text(
+                                                text = song.artist,
+                                                fontSize = 11.sp,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                        }
+
+                                        // Acciones para reordenar en la cola
+                                        if (onReorderQueue != null) {
+                                            IconButton(
+                                                onClick = {
+                                                    if (index > 0) onReorderQueue(index, index - 1)
+                                                },
+                                                enabled = index > 0,
+                                                modifier = Modifier.size(26.dp)
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Default.ArrowUpward,
+                                                    contentDescription = "Subir en cola",
+                                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                    modifier = Modifier.size(15.dp)
+                                                )
+                                            }
+                                            IconButton(
+                                                onClick = {
+                                                    if (index < currentQueue.lastIndex) onReorderQueue(index, index + 1)
+                                                },
+                                                enabled = index < currentQueue.lastIndex,
+                                                modifier = Modifier.size(26.dp)
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Default.ArrowDownward,
+                                                    contentDescription = "Bajar en cola",
+                                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                    modifier = Modifier.size(15.dp)
+                                                )
+                                            }
+                                        }
+
+                                        IconButton(
+                                            onClick = { onRemoveFromQueue(song.id) },
+                                            modifier = Modifier.size(28.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Close,
+                                                contentDescription = "Quitar de cola",
+                                                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            } else if (!showLyricsView) {
                 Box(
                     modifier = Modifier
                         .fillMaxWidth(0.85f)

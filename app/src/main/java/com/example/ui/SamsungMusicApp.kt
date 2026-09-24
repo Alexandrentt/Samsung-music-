@@ -43,6 +43,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.material.icons.filled.SwapVert
+import androidx.compose.material.icons.filled.VerticalAlignBottom
+import androidx.compose.material.icons.filled.VerticalAlignTop
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
 import com.example.data.Song
 import com.example.ui.components.DownloadTabContent
 import com.example.ui.components.MiniPlayerBar
@@ -58,6 +66,7 @@ import com.example.ui.components.StatsDialog
 @Composable
 fun SamsungMusicApp(viewModel: SamsungMusicViewModel) {
     val context = androidx.compose.ui.platform.LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
 
     val selectedTab by viewModel.selectedTab.collectAsState()
     val isSearchActive by viewModel.isSearchActive.collectAsState()
@@ -88,6 +97,33 @@ fun SamsungMusicApp(viewModel: SamsungMusicViewModel) {
     val repeatMode by viewModel.playerManager.repeatMode.collectAsState()
     val lyrics by viewModel.playerManager.currentLyrics.collectAsState()
     val activeLyricIndex by viewModel.playerManager.activeLyricIndex.collectAsState()
+    val currentQueue by viewModel.playerManager.queue.collectAsState()
+
+    // Estado para personalización del orden de canciones al mantener presionada una canción
+    var songToReorder by remember { mutableStateOf<Song?>(null) }
+    var isQuickReorderingMode by remember { mutableStateOf(false) }
+
+    // Pager para deslizar entre pestañas con el táctil
+    val tabs = remember { SamsungTab.values() }
+    val pagerState = rememberPagerState(
+        initialPage = tabs.indexOf(selectedTab).coerceAtLeast(0)
+    ) { tabs.size }
+
+    // Sincronización Pager -> ViewModel
+    LaunchedEffect(pagerState.currentPage) {
+        val currentTab = tabs[pagerState.currentPage]
+        if (currentTab != selectedTab) {
+            viewModel.selectTab(currentTab)
+        }
+    }
+
+    // Sincronización ViewModel -> Pager
+    LaunchedEffect(selectedTab) {
+        val targetIdx = tabs.indexOf(selectedTab)
+        if (targetIdx >= 0 && targetIdx != pagerState.currentPage) {
+            pagerState.animateScrollToPage(targetIdx)
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -104,15 +140,42 @@ fun SamsungMusicApp(viewModel: SamsungMusicViewModel) {
             )
         },
         bottomBar = {
+            val fallbackSong = remember(filteredSongs, favoriteSongs) {
+                filteredSongs.firstOrNull() ?: favoriteSongs.firstOrNull()
+            }
             MiniPlayerBar(
                 currentSong = currentSong,
+                defaultSong = fallbackSong,
                 isPlaying = isPlaying,
                 currentPositionMs = currentPositionMs,
                 durationMs = durationMs,
-                onTogglePlayPause = { viewModel.playerManager.togglePlayPause() },
-                onSkipNext = { viewModel.playerManager.skipToNext() },
-                onSkipPrevious = { viewModel.playerManager.skipToPrevious() },
-                onOpenPlayer = { viewModel.openNowPlayingSheet() }
+                onTogglePlayPause = {
+                    if (currentSong == null && fallbackSong != null) {
+                        viewModel.playSong(fallbackSong, filteredSongs.ifEmpty { listOf(fallbackSong) })
+                    } else {
+                        viewModel.playerManager.togglePlayPause()
+                    }
+                },
+                onSkipNext = {
+                    if (currentSong == null && fallbackSong != null) {
+                        viewModel.playSong(fallbackSong, filteredSongs)
+                    } else {
+                        viewModel.playerManager.skipToNext()
+                    }
+                },
+                onSkipPrevious = {
+                    if (currentSong == null && fallbackSong != null) {
+                        viewModel.playSong(fallbackSong, filteredSongs)
+                    } else {
+                        viewModel.playerManager.skipToPrevious()
+                    }
+                },
+                onOpenPlayer = {
+                    if (currentSong == null && fallbackSong != null) {
+                        viewModel.playSong(fallbackSong, filteredSongs)
+                    }
+                    viewModel.openNowPlayingSheet()
+                }
             )
         }
     ) { innerPadding ->
@@ -122,89 +185,111 @@ fun SamsungMusicApp(viewModel: SamsungMusicViewModel) {
                 .padding(innerPadding)
         ) {
             SamsungTabs(
-                selectedTab = selectedTab,
-                onTabSelected = { viewModel.selectTab(it) }
+                selectedTab = tabs[pagerState.currentPage],
+                onTabSelected = { tab ->
+                    val idx = tabs.indexOf(tab)
+                    if (idx >= 0) {
+                        coroutineScope.launch {
+                            pagerState.animateScrollToPage(idx)
+                        }
+                    }
+                }
             )
 
-            when (selectedTab) {
-                SamsungTab.TRACKS -> {
-                    SongsTabContent(
-                        songs = filteredSongs,
-                        currentSong = currentSong,
-                        isPlaying = isPlaying,
-                        sortOrder = songSortOrder,
-                        viewMode = songViewMode,
-                        onSortChange = { viewModel.setSongSortOrder(it) },
-                        onToggleSortDirection = { viewModel.toggleSongSortDirection() },
-                        onToggleViewMode = { viewModel.toggleSongViewMode() },
-                        onShuffleAll = { viewModel.playAllShuffled(filteredSongs) },
-                        onSongClick = { song -> viewModel.playSong(song, filteredSongs) },
-                        onToggleFavorite = { viewModel.toggleFavorite(it) },
-                        onPlayNext = { viewModel.playNext(listOf(it)) },
-                        onAddToPlaylist = { viewModel.openAddToPlaylistDialog(it) },
-                        onDeleteSong = { viewModel.deleteSong(it) }
-                    )
-                }
+            HorizontalPager(
+                state = pagerState,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+            ) { page ->
+                when (tabs[page]) {
+                    SamsungTab.TRACKS -> {
+                        SongsTabContent(
+                            songs = filteredSongs,
+                            currentSong = currentSong,
+                            isPlaying = isPlaying,
+                            sortOrder = songSortOrder,
+                            viewMode = songViewMode,
+                            onSortChange = { viewModel.setSongSortOrder(it) },
+                            onToggleSortDirection = { viewModel.toggleSongSortDirection() },
+                            onToggleViewMode = { viewModel.toggleSongViewMode() },
+                            onShuffleAll = { viewModel.playAllShuffled(filteredSongs) },
+                            onSongClick = { song -> viewModel.playSong(song, filteredSongs) },
+                            onToggleFavorite = { viewModel.toggleFavorite(it) },
+                            onPlayNext = { viewModel.playNext(listOf(it)) },
+                            onAddToPlaylist = { viewModel.openAddToPlaylistDialog(it) },
+                            onDeleteSong = { viewModel.deleteSong(it) },
+                            onSongLongClick = { songToReorder = it },
+                            onMoveSong = { id, offset -> viewModel.moveSong(id, offset) },
+                            isReorderingMode = isQuickReorderingMode,
+                            onToggleReorderingMode = { isQuickReorderingMode = !isQuickReorderingMode }
+                        )
+                    }
 
-                SamsungTab.FAVORITES -> {
-                    SongsTabContent(
-                        songs = favoriteSongs,
-                        currentSong = currentSong,
-                        isPlaying = isPlaying,
-                        sortOrder = songSortOrder,
-                        viewMode = songViewMode,
-                        onSortChange = { viewModel.setSongSortOrder(it) },
-                        onToggleSortDirection = { viewModel.toggleSongSortDirection() },
-                        onToggleViewMode = { viewModel.toggleSongViewMode() },
-                        onShuffleAll = { viewModel.playAllShuffled(favoriteSongs) },
-                        onSongClick = { song -> viewModel.playSong(song, favoriteSongs) },
-                        onToggleFavorite = { viewModel.toggleFavorite(it) },
-                        onPlayNext = { viewModel.playNext(listOf(it)) },
-                        onAddToPlaylist = { viewModel.openAddToPlaylistDialog(it) },
-                        onDeleteSong = { viewModel.deleteSong(it) },
-                        emptyMessage = "No tienes canciones marcadas como favoritas."
-                    )
-                }
+                    SamsungTab.FAVORITES -> {
+                        SongsTabContent(
+                            songs = favoriteSongs,
+                            currentSong = currentSong,
+                            isPlaying = isPlaying,
+                            sortOrder = songSortOrder,
+                            viewMode = songViewMode,
+                            onSortChange = { viewModel.setSongSortOrder(it) },
+                            onToggleSortDirection = { viewModel.toggleSongSortDirection() },
+                            onToggleViewMode = { viewModel.toggleSongViewMode() },
+                            onShuffleAll = { viewModel.playAllShuffled(favoriteSongs) },
+                            onSongClick = { song -> viewModel.playSong(song, favoriteSongs) },
+                            onToggleFavorite = { viewModel.toggleFavorite(it) },
+                            onPlayNext = { viewModel.playNext(listOf(it)) },
+                            onAddToPlaylist = { viewModel.openAddToPlaylistDialog(it) },
+                            onDeleteSong = { viewModel.deleteSong(it) },
+                            onSongLongClick = { songToReorder = it },
+                            onMoveSong = { id, offset -> viewModel.moveSong(id, offset) },
+                            isReorderingMode = isQuickReorderingMode,
+                            onToggleReorderingMode = { isQuickReorderingMode = !isQuickReorderingMode },
+                            emptyMessage = "No tienes canciones marcadas como favoritas."
+                        )
+                    }
 
-                SamsungTab.PLAYLISTS -> {
-                    PlaylistsTabContent(
-                        playlistsWithSongs = playlistsWithSongs,
-                        selectedPlaylistId = selectedPlaylistId,
-                        currentSong = currentSong,
-                        isPlaying = isPlaying,
-                        onSelectPlaylist = { viewModel.selectPlaylist(it) },
-                        onCreatePlaylist = { name, desc -> viewModel.createPlaylist(name, desc) },
-                        onDeletePlaylist = { viewModel.deletePlaylist(it) },
-                        onPlaySong = { song, queue -> viewModel.playSong(song, queue) },
-                        onToggleFavorite = { viewModel.toggleFavorite(it) },
-                        onRemoveSongFromPlaylist = { pId, sId -> viewModel.removeSongFromPlaylist(pId, sId) },
-                        onDeleteSong = { viewModel.deleteSong(it) },
-                        onPlayNext = { viewModel.playNext(it) }
-                    )
-                }
+                    SamsungTab.PLAYLISTS -> {
+                        PlaylistsTabContent(
+                            playlistsWithSongs = playlistsWithSongs,
+                            selectedPlaylistId = selectedPlaylistId,
+                            currentSong = currentSong,
+                            isPlaying = isPlaying,
+                            onSelectPlaylist = { viewModel.selectPlaylist(it) },
+                            onCreatePlaylist = { name, desc -> viewModel.createPlaylist(name, desc) },
+                            onDeletePlaylist = { viewModel.deletePlaylist(it) },
+                            onPlaySong = { song, queue -> viewModel.playSong(song, queue) },
+                            onToggleFavorite = { viewModel.toggleFavorite(it) },
+                            onRemoveSongFromPlaylist = { pId, sId -> viewModel.removeSongFromPlaylist(pId, sId) },
+                            onDeleteSong = { viewModel.deleteSong(it) },
+                            onPlayNext = { viewModel.playNext(it) }
+                        )
+                    }
 
-                SamsungTab.DOWNLOAD -> {
-                    DownloadTabContent(
-                        downloadProgress = downloadProgress,
-                        isDownloading = isDownloading,
-                        downloadHistory = downloadHistory,
-                        youtubeSearchQuery = youtubeSearchQuery,
-                        isSearchingYouTube = isSearchingYouTube,
-                        localSearchResults = localSearchResults,
-                        youtubeSearchResults = youtubeSearchResults,
-                        onYouTubeSearchQueryChange = { viewModel.setYouTubeSearchQuery(it) },
-                        onSearchYouTube = { viewModel.searchYouTube(it) },
-                        onPlayLocalSearchResult = { viewModel.playLocalSearchResult(it) },
-                        onSelectPlaylistItem = { item -> viewModel.downloadPlaylistItem(item) },
-                        onDownloadUrl = { url, enrich -> viewModel.downloadFromUrl(url, enrich) },
-                        onClearHistory = { viewModel.clearHistory() }
-                    )
+                    SamsungTab.DOWNLOAD -> {
+                        DownloadTabContent(
+                            downloadProgress = downloadProgress,
+                            isDownloading = isDownloading,
+                            downloadHistory = downloadHistory,
+                            youtubeSearchQuery = youtubeSearchQuery,
+                            isSearchingYouTube = isSearchingYouTube,
+                            localSearchResults = localSearchResults,
+                            youtubeSearchResults = youtubeSearchResults,
+                            onYouTubeSearchQueryChange = { viewModel.setYouTubeSearchQuery(it) },
+                            onSearchYouTube = { viewModel.searchYouTube(it) },
+                            onPlayLocalSearchResult = { viewModel.playLocalSearchResult(it) },
+                            onSelectPlaylistItem = { item -> viewModel.downloadPlaylistItem(item) },
+                            onDownloadUrl = { url, enrich -> viewModel.downloadFromUrl(url, enrich) },
+                            onClearHistory = { viewModel.clearHistory() }
+                        )
+                    }
                 }
             }
         }
     }
 
-    // Now Playing Modal Sheet
+    // Now Playing Modal Sheet con botón para ver la lista de reproducción actual
     if (showNowPlaying) {
         NowPlayingSheet(
             currentSong = currentSong,
@@ -215,6 +300,7 @@ fun SamsungMusicApp(viewModel: SamsungMusicViewModel) {
             repeatMode = repeatMode,
             lyrics = lyrics,
             activeLyricIndex = activeLyricIndex,
+            currentQueue = currentQueue,
             onDismiss = { viewModel.closeNowPlayingSheet() },
             onTogglePlayPause = { viewModel.playerManager.togglePlayPause() },
             onSkipNext = { viewModel.playerManager.skipToNext() },
@@ -224,7 +310,156 @@ fun SamsungMusicApp(viewModel: SamsungMusicViewModel) {
             onToggleShuffle = { viewModel.toggleShuffleWithFeedback() },
             onCycleRepeat = { viewModel.cycleRepeatModeWithFeedback() },
             onToggleFavorite = { viewModel.toggleFavorite(it) },
-            onOpenSoundAlive = { viewModel.openSoundAliveDialog() }
+            onOpenSoundAlive = { viewModel.openSoundAliveDialog() },
+            onSelectSongFromQueue = { song -> viewModel.playerManager.playSong(song, currentQueue) },
+            onRemoveFromQueue = { songId -> viewModel.removeFromQueue(songId) },
+            onReorderQueue = { fromIdx, toIdx -> viewModel.playerManager.reorderQueue(fromIdx, toIdx) }
+        )
+    }
+
+    // Diálogo para personalizar orden al mantener una canción presionada
+    songToReorder?.let { song ->
+        AlertDialog(
+            onDismissRequest = { songToReorder = null },
+            title = {
+                Text(
+                    text = "Personalizar orden",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 18.sp
+                )
+            },
+            text = {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Text(
+                        text = "\"${song.title}\" - ${song.artist}",
+                        fontSize = 13.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(bottom = 16.dp)
+                    )
+
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                viewModel.moveSong(song.id, -9999)
+                                songToReorder = null
+                            }
+                            .padding(vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.VerticalAlignTop,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(22.dp)
+                        )
+                        Text(
+                            text = "Mover al inicio de la lista",
+                            fontSize = 15.sp,
+                            modifier = Modifier.padding(start = 12.dp)
+                        )
+                    }
+
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                viewModel.moveSong(song.id, -1)
+                                songToReorder = null
+                            }
+                            .padding(vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.ArrowUpward,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(22.dp)
+                        )
+                        Text(
+                            text = "Subir una posición",
+                            fontSize = 15.sp,
+                            modifier = Modifier.padding(start = 12.dp)
+                        )
+                    }
+
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                viewModel.moveSong(song.id, 1)
+                                songToReorder = null
+                            }
+                            .padding(vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.ArrowDownward,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(22.dp)
+                        )
+                        Text(
+                            text = "Bajar una posición",
+                            fontSize = 15.sp,
+                            modifier = Modifier.padding(start = 12.dp)
+                        )
+                    }
+
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                viewModel.moveSong(song.id, 9999)
+                                songToReorder = null
+                            }
+                            .padding(vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.VerticalAlignBottom,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(22.dp)
+                        )
+                        Text(
+                            text = "Mover al final de la lista",
+                            fontSize = 15.sp,
+                            modifier = Modifier.padding(start = 12.dp)
+                        )
+                    }
+
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                isQuickReorderingMode = true
+                                songToReorder = null
+                            }
+                            .padding(vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.SwapVert,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.secondary,
+                            modifier = Modifier.size(22.dp)
+                        )
+                        Text(
+                            text = "Activar botones de reorganización rápida",
+                            fontSize = 15.sp,
+                            color = MaterialTheme.colorScheme.secondary,
+                            modifier = Modifier.padding(start = 12.dp)
+                        )
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = { songToReorder = null }) {
+                    Text("Cerrar")
+                }
+            }
         )
     }
 
@@ -290,12 +525,16 @@ private fun SongsTabContent(
     onPlayNext: (Song) -> Unit,
     onAddToPlaylist: (Song) -> Unit,
     onDeleteSong: (Song) -> Unit,
+    onSongLongClick: (Song) -> Unit = {},
+    onMoveSong: (songId: String, offset: Int) -> Unit = { _, _ -> },
+    isReorderingMode: Boolean = false,
+    onToggleReorderingMode: () -> Unit = {},
     emptyMessage: String = "No hay canciones disponibles."
 ) {
     var showSortMenu by remember { mutableStateOf(false) }
 
     Column(modifier = Modifier.fillMaxSize()) {
-        // Toolbar: shuffle | count | sort chip + direction | view mode
+        // Toolbar: shuffle | count | sort chip + direction | view mode | reorder toggle
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -316,6 +555,16 @@ private fun SongsTabContent(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.weight(1f)
             )
+
+            // Reorder toggle button
+            IconButton(onClick = onToggleReorderingMode) {
+                Icon(
+                    imageVector = Icons.Default.SwapVert,
+                    contentDescription = "Personalizar orden",
+                    tint = if (isReorderingMode || sortOrder.field == SongSortField.CUSTOM) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(22.dp)
+                )
+            }
 
             // Sort field chip with menu (field + quick direction toggle inside)
             FilterChip(
@@ -417,7 +666,13 @@ private fun SongsTabContent(
                         onToggleFavorite = { onToggleFavorite(song) },
                         onPlayNext = { onPlayNext(song) },
                         onAddToPlaylist = { onAddToPlaylist(song) },
-                        onDelete = { onDeleteSong(song) }
+                        onDelete = { onDeleteSong(song) },
+                        onLongClick = { onSongLongClick(song) },
+                        onMoveUp = { onMoveSong(song.id, -1) },
+                        onMoveDown = { onMoveSong(song.id, 1) },
+                        onMoveToTop = { onMoveSong(song.id, -9999) },
+                        onMoveToBottom = { onMoveSong(song.id, 9999) },
+                        showReorderControls = isReorderingMode
                     )
                 }
             }

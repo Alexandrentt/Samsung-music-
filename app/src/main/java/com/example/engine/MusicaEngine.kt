@@ -11,6 +11,8 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
+import android.media.MediaScannerConnection
+import android.os.Environment
 import java.io.File
 import java.net.URLEncoder
 import java.text.Normalizer
@@ -25,10 +27,86 @@ class MusicaEngine(private val context: Context) {
         .readTimeout(25L, TimeUnit.SECONDS)
         .build()
 
+    /**
+     * Carpeta compartida en almacenamiento público para que las canciones NO se borren
+     * si el usuario desinstala la aplicación. Al reinstalar la app, las canciones
+     * son detectadas automáticamente.
+     */
     val musicFolder: File by lazy {
-        val folder = context.getExternalFilesDir("Music") ?: File(context.filesDir, "Music")
-        if (!folder.exists()) folder.mkdirs()
-        folder
+        try {
+            val publicDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC)
+            val samsungFolder = File(publicDir, "SamsungMusic")
+            if (!samsungFolder.exists()) {
+                samsungFolder.mkdirs()
+            }
+            if (samsungFolder.exists()) {
+                return@lazy samsungFolder
+            }
+        } catch (_: Exception) {}
+        val fallback = context.getExternalFilesDir(Environment.DIRECTORY_MUSIC) ?: File(context.filesDir, "Music")
+        if (!fallback.exists()) fallback.mkdirs()
+        fallback
+    }
+
+    /**
+     * Escanea canciones ya descargadas en la carpeta de música compartida y en la
+     * carpeta interna legacy para recuperarlas tras reinstalación o borrado de caché.
+     */
+    suspend fun scanAndRecoverExistingSongs(): List<Song> = withContext(Dispatchers.IO) {
+        val recovered = mutableListOf<Song>()
+        val foldersToScan = mutableListOf<File>()
+        try {
+            val publicDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC)
+            foldersToScan.add(File(publicDir, "SamsungMusic"))
+        } catch (_: Exception) {}
+        context.getExternalFilesDir(Environment.DIRECTORY_MUSIC)?.let { foldersToScan.add(it) }
+        context.getExternalFilesDir("Music")?.let { foldersToScan.add(it) }
+        foldersToScan.add(musicFolder)
+
+        val seenPaths = mutableSetOf<String>()
+        for (folder in foldersToScan.distinctBy { it.absolutePath }) {
+            if (!folder.exists() || !folder.isDirectory) continue
+            val audioFiles = folder.listFiles { file ->
+                file.isFile && (file.name.endsWith(".m4a") || file.name.endsWith(".mp3")) && file.length() > 10_000L
+            } ?: emptyArray()
+
+            for (audioFile in audioFiles) {
+                if (!seenPaths.add(audioFile.absolutePath)) continue
+                val rawName = audioFile.nameWithoutExtension
+                val cleanId = rawName.substringAfterLast('_').take(11)
+                val baseTitle = rawName.substringBeforeLast('_').replace('_', ' ').trim()
+                val id = if (cleanId.isNotBlank() && cleanId.length >= 6) "yt_$cleanId" else "local_${audioFile.name.hashCode()}"
+
+                val probedMs = YouTubeAudioDownloader.probeDurationMs(audioFile.absolutePath)
+                val lrcFile = File(audioFile.parentFile, "${rawName}.lrc")
+                val lrcPath = if (lrcFile.exists() && lrcFile.length() > 0) lrcFile.absolutePath else null
+
+                recovered.add(
+                    Song(
+                        id = id,
+                        title = baseTitle.ifBlank { "Canción descargada" },
+                        artist = "Samsung Music",
+                        album = "Descargas",
+                        durationMs = if (probedMs > 0) probedMs else 180000L,
+                        filePath = audioFile.absolutePath,
+                        fileSizeBytes = audioFile.length(),
+                        coverArtUrl = if (cleanId.length == 11) "https://img.youtube.com/vi/$cleanId/hqdefault.jpg" else null,
+                        isFavorite = false,
+                        playCount = 0,
+                        dateAdded = audioFile.lastModified(),
+                        lastPlayedAt = null,
+                        enrichmentScore = 80,
+                        releaseId = null,
+                        lrcFilePath = lrcPath,
+                        isDownloaded = true,
+                        bitrate = "320 kbps",
+                        youtubeVideoId = if (cleanId.length == 11) cleanId else null,
+                        youtubeChannel = "Samsung Music"
+                    )
+                )
+            }
+        }
+        recovered
     }
 
     data class PlaylistItem(val videoId: String, val title: String, val channel: String)
@@ -620,6 +698,15 @@ class MusicaEngine(private val context: Context) {
                 LrcParser.saveLrc(lrcFile, lrc)
             }
         }
+
+        try {
+            MediaScannerConnection.scanFile(
+                context,
+                arrayOf(targetFile.absolutePath),
+                arrayOf("audio/mp4"),
+                null
+            )
+        } catch (_: Exception) {}
 
         Song(
             id = "yt_$cleanId",
