@@ -28,24 +28,15 @@ class MusicaEngine(private val context: Context) {
         .build()
 
     /**
-     * Carpeta compartida en almacenamiento público para que las canciones NO se borren
-     * si el usuario desinstala la aplicación. Al reinstalar la app, las canciones
-     * son detectadas automáticamente.
+     * Carpeta de almacenamiento para canciones descargadas.
+     * Utiliza el directorio app-specific garantizado para lectura y escritura
+     * sin errores de Scoped Storage ni permisos EACCES en Android 11+.
      */
     val musicFolder: File by lazy {
-        try {
-            val publicDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC)
-            val samsungFolder = File(publicDir, "SamsungMusic")
-            if (!samsungFolder.exists()) {
-                samsungFolder.mkdirs()
-            }
-            if (samsungFolder.exists()) {
-                return@lazy samsungFolder
-            }
-        } catch (_: Exception) {}
-        val fallback = context.getExternalFilesDir(Environment.DIRECTORY_MUSIC) ?: File(context.filesDir, "Music")
-        if (!fallback.exists()) fallback.mkdirs()
-        fallback
+        val appMusic = context.getExternalFilesDir(Environment.DIRECTORY_MUSIC)
+            ?: File(context.filesDir, "Music")
+        if (!appMusic.exists()) appMusic.mkdirs()
+        appMusic
     }
 
     /**
@@ -67,7 +58,7 @@ class MusicaEngine(private val context: Context) {
         for (folder in foldersToScan.distinctBy { it.absolutePath }) {
             if (!folder.exists() || !folder.isDirectory) continue
             val audioFiles = folder.listFiles { file ->
-                file.isFile && (file.name.endsWith(".m4a") || file.name.endsWith(".mp3")) && file.length() > 10_000L
+                file.isFile && (file.name.endsWith(".m4a") || file.name.endsWith(".mp3") || file.name.endsWith(".wav")) && file.length() > 10_000L
             } ?: emptyArray()
 
             for (audioFile in audioFiles) {

@@ -20,6 +20,8 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Bedtime
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.KeyboardArrowDown
@@ -95,6 +97,9 @@ fun NowPlayingSheet(
     onCycleRepeat: () -> Unit,
     onToggleFavorite: (Song) -> Unit,
     onOpenSoundAlive: () -> Unit,
+    onOpenSleepTimer: () -> Unit = {},
+    sleepTimerRemainingMs: Long? = null,
+    onEditCover: (Song) -> Unit = {},
     onSelectSongFromQueue: (Song) -> Unit = {},
     onRemoveFromQueue: (String) -> Unit = {},
     onReorderQueue: ((Int, Int) -> Unit)? = null
@@ -165,6 +170,26 @@ fun NowPlayingSheet(
                 )
 
                 Row(verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(onClick = onOpenSleepTimer) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                imageVector = Icons.Default.Bedtime,
+                                contentDescription = "Temporizador de apagado",
+                                tint = if (sleepTimerRemainingMs != null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onBackground,
+                                modifier = Modifier.size(24.dp)
+                            )
+                            if (sleepTimerRemainingMs != null) {
+                                Box(
+                                    modifier = Modifier
+                                        .align(Alignment.TopEnd)
+                                        .size(8.dp)
+                                        .clip(CircleShape)
+                                        .background(MaterialTheme.colorScheme.primary)
+                                )
+                            }
+                        }
+                    }
+
                     // Botón para ver lista de reproducción actual
                     IconButton(onClick = {
                         showQueueView = !showQueueView
@@ -364,6 +389,26 @@ fun NowPlayingSheet(
                         modifier = Modifier.fillMaxSize(),
                         contentScale = ContentScale.Crop
                     )
+
+                    // Botón para cambiar portada
+                    Surface(
+                        shape = CircleShape,
+                        color = Color.Black.copy(alpha = 0.55f),
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(10.dp)
+                            .size(34.dp)
+                            .clickable { onEditCover(currentSong) }
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                imageVector = Icons.Default.Edit,
+                                contentDescription = "Cambiar portada",
+                                tint = Color.White,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    }
 
                     // Tappable overlay hint: opens lyrics
                     Box(

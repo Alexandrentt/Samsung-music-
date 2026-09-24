@@ -99,6 +99,74 @@ class SamsungMusicViewModel(application: Application) : AndroidViewModel(applica
     private val _showSoundAliveDialog = MutableStateFlow(false)
     val showSoundAliveDialog: StateFlow<Boolean> = _showSoundAliveDialog.asStateFlow()
 
+    // Convivencia de audio con otras aplicaciones (YouTube, YouTube Music, etc.)
+    val isDuckingEnabled: StateFlow<Boolean> = playerManager.isDuckingEnabled
+    val pauseOnOtherMedia: StateFlow<Boolean> = playerManager.pauseOnOtherMedia
+    val isOtherAppPlaying: StateFlow<Boolean> = playerManager.isOtherAppPlaying
+    val isDucked: StateFlow<Boolean> = playerManager.isDucked
+
+    fun setDuckingEnabled(enabled: Boolean) {
+        playerManager.setDuckingEnabled(enabled)
+    }
+
+    fun setPauseOnOtherMedia(enabled: Boolean) {
+        playerManager.setPauseOnOtherMedia(enabled)
+    }
+
+    // Sleep Timer (Temporizador de apagado)
+    val sleepTimerRemainingMs: StateFlow<Long?> = playerManager.sleepTimerRemainingMs
+    val sleepTimerPauseAtEndOfSong: StateFlow<Boolean> = playerManager.sleepTimerPauseAtEndOfSong
+
+    private val _showSleepTimerDialog = MutableStateFlow(false)
+    val showSleepTimerDialog: StateFlow<Boolean> = _showSleepTimerDialog.asStateFlow()
+
+    fun openSleepTimerDialog() {
+        _showSleepTimerDialog.value = true
+    }
+
+    fun closeSleepTimerDialog() {
+        _showSleepTimerDialog.value = false
+    }
+
+    fun setSleepTimer(minutes: Int, pauseAtEndOfSong: Boolean) {
+        playerManager.startSleepTimer(minutes, pauseAtEndOfSong)
+        showFeedbackToast("Temporizador fijado a $minutes min")
+    }
+
+    fun cancelSleepTimer() {
+        playerManager.cancelSleepTimer()
+        showFeedbackToast("Temporizador cancelado")
+    }
+
+    fun addSleepTimerMinutes(minutes: Int) {
+        playerManager.addSleepTimerMinutes(minutes)
+        showFeedbackToast("+$minutes min añadidos")
+    }
+
+    // Editor de portadas
+    private val _songForCoverEdit = MutableStateFlow<Song?>(null)
+    val songForCoverEdit: StateFlow<Song?> = _songForCoverEdit.asStateFlow()
+
+    fun openCoverArtEditor(song: Song) {
+        _songForCoverEdit.value = song
+    }
+
+    fun closeCoverArtEditor() {
+        _songForCoverEdit.value = null
+    }
+
+    fun updateSongCoverArt(songId: String, newCoverPath: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            repository.updateCoverArt(songId, newCoverPath)
+            withContext(Dispatchers.Main) {
+                if (playerManager.currentSong.value?.id == songId) {
+                    playerManager.updateCurrentSongCover(newCoverPath)
+                }
+                showFeedbackToast("Portada actualizada")
+            }
+        }
+    }
+
     private val _selectedPlaylistId = MutableStateFlow<Long?>(null)
     val selectedPlaylistId: StateFlow<Long?> = _selectedPlaylistId.asStateFlow()
 
@@ -184,6 +252,9 @@ class SamsungMusicViewModel(application: Application) : AndroidViewModel(applica
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     init {
+        playerManager.onToggleFavoriteCallback = { song ->
+            toggleFavorite(song)
+        }
         playerManager.onHalfPlayedCallback = { songId ->
             viewModelScope.launch(Dispatchers.IO) {
                 repository.incrementPlayCount(songId)
@@ -386,7 +457,13 @@ class SamsungMusicViewModel(application: Application) : AndroidViewModel(applica
 
     fun toggleFavorite(song: Song) {
         viewModelScope.launch(Dispatchers.IO) {
-            repository.setFavorite(song.id, !song.isFavorite)
+            val newFav = !song.isFavorite
+            repository.setFavorite(song.id, newFav)
+            withContext(Dispatchers.Main) {
+                if (playerManager.currentSong.value?.id == song.id) {
+                    playerManager.updateCurrentSongFavorite(newFav)
+                }
+            }
         }
     }
 

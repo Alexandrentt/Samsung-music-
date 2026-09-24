@@ -17,6 +17,7 @@ import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.VerticalAlignBottom
 import androidx.compose.material.icons.filled.VerticalAlignTop
@@ -54,6 +55,7 @@ fun SongItemRow(
     onToggleFavorite: () -> Unit,
     onPlayNext: () -> Unit,
     onAddToPlaylist: () -> Unit,
+    onEditCover: () -> Unit = {},
     onDelete: () -> Unit,
     onLongClick: (() -> Unit)? = null,
     onMoveUp: (() -> Unit)? = null,
@@ -174,6 +176,14 @@ fun SongItemRow(
                     onClick = {
                         showMenu = false
                         onAddToPlaylist()
+                    }
+                )
+                DropdownMenuItem(
+                    text = { Text("Cambiar portada") },
+                    leadingIcon = { Icon(Icons.Default.Image, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                    onClick = {
+                        showMenu = false
+                        onEditCover()
                     }
                 )
                 if (onMoveUp != null || onMoveDown != null) {

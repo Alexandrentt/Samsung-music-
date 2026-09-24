@@ -52,12 +52,14 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.launch
 import com.example.data.Song
+import com.example.ui.components.CoverArtEditorDialog
 import com.example.ui.components.DownloadTabContent
 import com.example.ui.components.MiniPlayerBar
 import com.example.ui.components.NowPlayingSheet
 import com.example.ui.components.PlaylistsTabContent
 import com.example.ui.components.SamsungTabs
 import com.example.ui.components.SamsungTopAppBar
+import com.example.ui.components.SleepTimerDialog
 import com.example.ui.components.SongGridItem
 import com.example.ui.components.SongItemRow
 import com.example.ui.components.SoundAliveDialog
@@ -81,6 +83,13 @@ fun SamsungMusicApp(viewModel: SamsungMusicViewModel) {
     val statsData by viewModel.statsDialogData.collectAsState()
     val showNowPlaying by viewModel.showNowPlayingSheet.collectAsState()
     val showSoundAlive by viewModel.showSoundAliveDialog.collectAsState()
+    val isDuckingEnabled by viewModel.isDuckingEnabled.collectAsState()
+    val pauseOnOtherMedia by viewModel.pauseOnOtherMedia.collectAsState()
+    val isOtherAppPlaying by viewModel.isOtherAppPlaying.collectAsState()
+    val sleepTimerRemainingMs by viewModel.sleepTimerRemainingMs.collectAsState()
+    val sleepTimerPauseAtEndOfSong by viewModel.sleepTimerPauseAtEndOfSong.collectAsState()
+    val showSleepTimerDialog by viewModel.showSleepTimerDialog.collectAsState()
+    val songForCoverEdit by viewModel.songForCoverEdit.collectAsState()
     val songToAddToPlaylist by viewModel.songToAddToPlaylist.collectAsState()
     val songSortOrder by viewModel.songSortOrder.collectAsState()
     val songViewMode by viewModel.songViewMode.collectAsState()
@@ -133,6 +142,8 @@ fun SamsungMusicApp(viewModel: SamsungMusicViewModel) {
                 onSearchQueryChange = { viewModel.setSearchQuery(it) },
                 onToggleSearch = { viewModel.toggleSearchActive(it) },
                 onOpenSoundAlive = { viewModel.openSoundAliveDialog() },
+                onOpenSleepTimer = { viewModel.openSleepTimerDialog() },
+                sleepTimerRemainingMs = sleepTimerRemainingMs,
                 onShowStats = { viewModel.showStatistics() },
                 onCleanFolder = { viewModel.cleanMusicFolder() },
                 onEnrichAll = { viewModel.enrichAllSongs(force = true) },
@@ -218,6 +229,7 @@ fun SamsungMusicApp(viewModel: SamsungMusicViewModel) {
                             onToggleFavorite = { viewModel.toggleFavorite(it) },
                             onPlayNext = { viewModel.playNext(listOf(it)) },
                             onAddToPlaylist = { viewModel.openAddToPlaylistDialog(it) },
+                            onEditCover = { viewModel.openCoverArtEditor(it) },
                             onDeleteSong = { viewModel.deleteSong(it) },
                             onSongLongClick = { songToReorder = it },
                             onMoveSong = { id, offset -> viewModel.moveSong(id, offset) },
@@ -241,6 +253,7 @@ fun SamsungMusicApp(viewModel: SamsungMusicViewModel) {
                             onToggleFavorite = { viewModel.toggleFavorite(it) },
                             onPlayNext = { viewModel.playNext(listOf(it)) },
                             onAddToPlaylist = { viewModel.openAddToPlaylistDialog(it) },
+                            onEditCover = { viewModel.openCoverArtEditor(it) },
                             onDeleteSong = { viewModel.deleteSong(it) },
                             onSongLongClick = { songToReorder = it },
                             onMoveSong = { id, offset -> viewModel.moveSong(id, offset) },
@@ -263,6 +276,7 @@ fun SamsungMusicApp(viewModel: SamsungMusicViewModel) {
                             onToggleFavorite = { viewModel.toggleFavorite(it) },
                             onRemoveSongFromPlaylist = { pId, sId -> viewModel.removeSongFromPlaylist(pId, sId) },
                             onDeleteSong = { viewModel.deleteSong(it) },
+                            onEditCover = { viewModel.openCoverArtEditor(it) },
                             onPlayNext = { viewModel.playNext(it) }
                         )
                     }
@@ -311,9 +325,37 @@ fun SamsungMusicApp(viewModel: SamsungMusicViewModel) {
             onCycleRepeat = { viewModel.cycleRepeatModeWithFeedback() },
             onToggleFavorite = { viewModel.toggleFavorite(it) },
             onOpenSoundAlive = { viewModel.openSoundAliveDialog() },
+            onOpenSleepTimer = { viewModel.openSleepTimerDialog() },
+            sleepTimerRemainingMs = sleepTimerRemainingMs,
+            onEditCover = { viewModel.openCoverArtEditor(it) },
             onSelectSongFromQueue = { song -> viewModel.playerManager.playSong(song, currentQueue) },
             onRemoveFromQueue = { songId -> viewModel.removeFromQueue(songId) },
             onReorderQueue = { fromIdx, toIdx -> viewModel.playerManager.reorderQueue(fromIdx, toIdx) }
+        )
+    }
+
+    // Diálogo del temporizador de apagado
+    if (showSleepTimerDialog) {
+        SleepTimerDialog(
+            remainingMs = sleepTimerRemainingMs,
+            pauseAtEndOfSong = sleepTimerPauseAtEndOfSong,
+            onSetTimer = { minutes, pauseAtEnd ->
+                viewModel.setSleepTimer(minutes, pauseAtEnd)
+            },
+            onCancelTimer = { viewModel.cancelSleepTimer() },
+            onAddMinutes = { viewModel.addSleepTimerMinutes(it) },
+            onDismiss = { viewModel.closeSleepTimerDialog() }
+        )
+    }
+
+    // Diálogo del editor de portadas (Navegador web / Galería / URL)
+    songForCoverEdit?.let { song ->
+        CoverArtEditorDialog(
+            song = song,
+            onSaveCover = { songId, path ->
+                viewModel.updateSongCoverArt(songId, path)
+            },
+            onDismiss = { viewModel.closeCoverArtEditor() }
         )
     }
 
@@ -465,7 +507,14 @@ fun SamsungMusicApp(viewModel: SamsungMusicViewModel) {
 
     // SoundAlive Equalizer Dialog
     if (showSoundAlive) {
-        SoundAliveDialog(onDismiss = { viewModel.closeSoundAliveDialog() })
+        SoundAliveDialog(
+            onDismiss = { viewModel.closeSoundAliveDialog() },
+            isDuckingEnabled = isDuckingEnabled,
+            onToggleDucking = { viewModel.setDuckingEnabled(it) },
+            pauseOnOtherMedia = pauseOnOtherMedia,
+            onTogglePauseOnOtherMedia = { viewModel.setPauseOnOtherMedia(it) },
+            isOtherAppPlaying = isOtherAppPlaying
+        )
     }
 
     // Stats Dialog
@@ -524,6 +573,7 @@ private fun SongsTabContent(
     onToggleFavorite: (Song) -> Unit,
     onPlayNext: (Song) -> Unit,
     onAddToPlaylist: (Song) -> Unit,
+    onEditCover: (Song) -> Unit = {},
     onDeleteSong: (Song) -> Unit,
     onSongLongClick: (Song) -> Unit = {},
     onMoveSong: (songId: String, offset: Int) -> Unit = { _, _ -> },
@@ -666,6 +716,7 @@ private fun SongsTabContent(
                         onToggleFavorite = { onToggleFavorite(song) },
                         onPlayNext = { onPlayNext(song) },
                         onAddToPlaylist = { onAddToPlaylist(song) },
+                        onEditCover = { onEditCover(song) },
                         onDelete = { onDeleteSong(song) },
                         onLongClick = { onSongLongClick(song) },
                         onMoveUp = { onMoveSong(song.id, -1) },
@@ -690,7 +741,8 @@ private fun SongsTabContent(
                         isCurrentSong = song.id == currentSong?.id,
                         isPlaying = isPlaying,
                         onSongClick = { onSongClick(song) },
-                        onToggleFavorite = { onToggleFavorite(song) }
+                        onToggleFavorite = { onToggleFavorite(song) },
+                        onEditCover = { onEditCover(song) }
                     )
                 }
             }

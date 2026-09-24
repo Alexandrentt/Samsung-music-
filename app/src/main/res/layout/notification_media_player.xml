@@ -1,0 +1,113 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/notif_collapsed_root"
+    android:layout_width="match_parent"
+    android:layout_height="96dp"
+    android:background="@drawable/bg_notif_card">
+
+    <ImageView
+        android:id="@+id/notif_bg_art"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:scaleType="centerCrop"
+        android:src="@drawable/bg_notif_gradient" />
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@drawable/bg_notif_gradient" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="vertical"
+        android:padding="10dp">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginEnd="10dp"
+                android:layout_weight="1"
+                android:orientation="vertical">
+
+                <TextView
+                    android:id="@+id/notif_song_title"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:ellipsize="end"
+                    android:maxLines="1"
+                    android:text="Samsung Music"
+                    android:textColor="#FFFFFF"
+                    android:textSize="16sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/notif_song_artist"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="2dp"
+                    android:ellipsize="end"
+                    android:maxLines="1"
+                    android:text="Reproducción activa"
+                    android:textColor="#DDFFFFFF"
+                    android:textSize="12sp" />
+            </LinearLayout>
+
+            <ImageButton
+                android:id="@+id/notif_btn_prev"
+                android:layout_width="32dp"
+                android:layout_height="32dp"
+                android:background="@android:color/transparent"
+                android:contentDescription="Anterior"
+                android:scaleType="centerInside"
+                android:src="@drawable/ic_notif_prev" />
+
+            <ImageButton
+                android:id="@+id/notif_btn_play_pause"
+                android:layout_width="44dp"
+                android:layout_height="44dp"
+                android:layout_marginHorizontal="6dp"
+                android:background="@drawable/bg_notif_play_squircle"
+                android:contentDescription="Reproducir o pausar"
+                android:scaleType="centerInside"
+                android:src="@drawable/ic_notif_pause_dark" />
+
+            <ImageButton
+                android:id="@+id/notif_btn_next"
+                android:layout_width="32dp"
+                android:layout_height="32dp"
+                android:background="@android:color/transparent"
+                android:contentDescription="Siguiente"
+                android:scaleType="centerInside"
+                android:src="@drawable/ic_notif_next" />
+
+            <ImageButton
+                android:id="@+id/notif_btn_close"
+                android:layout_width="26dp"
+                android:layout_height="26dp"
+                android:layout_marginStart="8dp"
+                android:background="@drawable/bg_notif_close_circle"
+                android:contentDescription="Cerrar"
+                android:padding="5dp"
+                android:scaleType="centerInside"
+                android:src="@drawable/ic_notif_close" />
+        </LinearLayout>
+
+        <ProgressBar
+            android:id="@+id/notif_progress_bar"
+            style="?android:attr/progressBarStyleHorizontal"
+            android:layout_width="match_parent"
+            android:layout_height="4dp"
+            android:layout_marginTop="4dp"
+            android:max="1000"
+            android:progress="350"
+            android:progressDrawable="@drawable/progress_notif_drawable" />
+    </LinearLayout>
+</FrameLayout>

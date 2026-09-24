@@ -40,6 +40,9 @@ interface SongDao {
     @Query("UPDATE songs SET isFavorite = :isFavorite WHERE id = :id")
     suspend fun setFavorite(id: String, isFavorite: Boolean)
 
+    @Query("UPDATE songs SET coverArtUrl = :coverArtUrl WHERE id = :id")
+    suspend fun updateCoverArt(id: String, coverArtUrl: String)
+
     @Query("UPDATE songs SET title = :title, artist = :artist, album = :album, coverArtUrl = :coverArtUrl, enrichmentScore = :score, releaseId = :releaseId WHERE id = :id")
     suspend fun updateMetadata(
         id: String,

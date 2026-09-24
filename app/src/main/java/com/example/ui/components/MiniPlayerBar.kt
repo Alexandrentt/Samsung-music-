@@ -195,29 +195,29 @@ fun MiniPlayerBar(
                         )
                     }
 
-                    // Botón Play / Pause destacado
+                    // Botón Play / Pause destacado con estilo One UI squircle
                     Surface(
-                        shape = CircleShape,
-                        color = MaterialTheme.colorScheme.primary,
+                        shape = RoundedCornerShape(13.dp),
+                        color = Color(0xFFFFD8CE),
                         modifier = Modifier
-                            .size(42.dp)
-                            .clip(CircleShape)
+                            .size(44.dp)
+                            .clip(RoundedCornerShape(13.dp))
                             .clickable(enabled = displaySong != null) { onTogglePlayPause() }
                     ) {
                         Box(contentAlignment = Alignment.Center) {
                             if (isActuallyPlaying) {
                                 Icon(
-                                    painter = painterResource(id = R.drawable.ic_widget_pause),
+                                    painter = painterResource(id = R.drawable.ic_notif_pause_dark),
                                     contentDescription = "Pausar",
-                                    tint = MaterialTheme.colorScheme.onPrimary,
-                                    modifier = Modifier.size(20.dp)
+                                    tint = Color(0xFF371E1B),
+                                    modifier = Modifier.size(22.dp)
                                 )
                             } else {
                                 Icon(
-                                    imageVector = Icons.Default.PlayArrow,
+                                    painter = painterResource(id = R.drawable.ic_notif_play_dark),
                                     contentDescription = "Reproducir",
-                                    tint = MaterialTheme.colorScheme.onPrimary,
-                                    modifier = Modifier.size(24.dp)
+                                    tint = Color(0xFF371E1B),
+                                    modifier = Modifier.size(22.dp)
                                 )
                             }
                         }

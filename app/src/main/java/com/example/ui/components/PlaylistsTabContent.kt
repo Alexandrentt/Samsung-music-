@@ -63,6 +63,7 @@ fun PlaylistsTabContent(
     onToggleFavorite: (Song) -> Unit,
     onRemoveSongFromPlaylist: (Long, String) -> Unit,
     onDeleteSong: (Song) -> Unit,
+    onEditCover: (Song) -> Unit = {},
     onPlayNext: (List<Song>) -> Unit
 ) {
     var showCreateDialog by remember { mutableStateOf(false) }
@@ -131,6 +132,7 @@ fun PlaylistsTabContent(
                             onToggleFavorite = { onToggleFavorite(song) },
                             onPlayNext = { onPlayNext(listOf(song)) },
                             onAddToPlaylist = {},
+                            onEditCover = { onEditCover(song) },
                             onDelete = { onRemoveSongFromPlaylist(activePlaylist.playlist.id, song.id) }
                         )
                     }

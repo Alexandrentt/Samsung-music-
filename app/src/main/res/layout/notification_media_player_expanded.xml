@@ -1,0 +1,196 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/notif_root"
+    android:layout_width="match_parent"
+    android:layout_height="185dp"
+    android:background="@drawable/bg_notif_card">
+
+    <!-- Album Art Background -->
+    <ImageView
+        android:id="@+id/notif_bg_art"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:scaleType="centerCrop"
+        android:src="@drawable/bg_notif_gradient" />
+
+    <!-- Dark gradient overlay for text readability -->
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@drawable/bg_notif_gradient" />
+
+    <!-- Foreground Controls -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="vertical"
+        android:padding="12dp">
+
+        <!-- Top Row: Badge, Phone Output Pill, Close button -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <ImageView
+                android:id="@+id/notif_badge_icon"
+                android:layout_width="26dp"
+                android:layout_height="26dp"
+                android:contentDescription="Samsung Music"
+                android:src="@drawable/ic_notif_play_ring" />
+
+            <View
+                android:layout_width="0dp"
+                android:layout_height="1dp"
+                android:layout_weight="1" />
+
+            <!-- Pill: Este teléfono -->
+            <LinearLayout
+                android:id="@+id/notif_phone_pill"
+                android:layout_width="wrap_content"
+                android:layout_height="28dp"
+                android:background="@drawable/bg_notif_phone_chip"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:paddingHorizontal="10dp">
+
+                <ImageView
+                    android:layout_width="14dp"
+                    android:layout_height="14dp"
+                    android:contentDescription="Teléfono"
+                    android:src="@drawable/ic_notif_phone" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="5dp"
+                    android:text="Este teléfono"
+                    android:textColor="#371E1B"
+                    android:textSize="12sp"
+                    android:textStyle="bold" />
+            </LinearLayout>
+
+            <!-- Close 'X' Button -->
+            <ImageButton
+                android:id="@+id/notif_btn_close"
+                android:layout_width="28dp"
+                android:layout_height="28dp"
+                android:layout_marginStart="8dp"
+                android:background="@drawable/bg_notif_close_circle"
+                android:contentDescription="Cerrar reproducción"
+                android:padding="6dp"
+                android:scaleType="centerInside"
+                android:src="@drawable/ic_notif_close" />
+        </LinearLayout>
+
+        <!-- Middle Row: Title, Artist, and Big Squircle Play/Pause button -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_marginTop="8dp"
+            android:layout_weight="1"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginEnd="12dp"
+                android:layout_weight="1"
+                android:orientation="vertical">
+
+                <TextView
+                    android:id="@+id/notif_song_title"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:ellipsize="end"
+                    android:maxLines="1"
+                    android:text="Samsung Music"
+                    android:textColor="#FFFFFF"
+                    android:textSize="18sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/notif_song_artist"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="2dp"
+                    android:ellipsize="end"
+                    android:maxLines="1"
+                    android:text="Reproducción activa"
+                    android:textColor="#DDFFFFFF"
+                    android:textSize="13sp" />
+            </LinearLayout>
+
+            <!-- Big Squircle Play/Pause Button -->
+            <ImageButton
+                android:id="@+id/notif_btn_play_pause"
+                android:layout_width="52dp"
+                android:layout_height="52dp"
+                android:background="@drawable/bg_notif_play_squircle"
+                android:contentDescription="Reproducir o pausar"
+                android:scaleType="centerInside"
+                android:src="@drawable/ic_notif_pause_dark" />
+        </LinearLayout>
+
+        <!-- Bottom Row: Prev, Progress Bar, Next, Shuffle, Favorite -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <ImageButton
+                android:id="@+id/notif_btn_prev"
+                android:layout_width="32dp"
+                android:layout_height="32dp"
+                android:background="@android:color/transparent"
+                android:contentDescription="Anterior"
+                android:scaleType="centerInside"
+                android:src="@drawable/ic_notif_prev" />
+
+            <!-- Progress Scrub Bar -->
+            <ProgressBar
+                android:id="@+id/notif_progress_bar"
+                style="?android:attr/progressBarStyleHorizontal"
+                android:layout_width="0dp"
+                android:layout_height="6dp"
+                android:layout_marginHorizontal="8dp"
+                android:layout_weight="1"
+                android:max="1000"
+                android:progress="350"
+                android:progressDrawable="@drawable/progress_notif_drawable" />
+
+            <ImageButton
+                android:id="@+id/notif_btn_next"
+                android:layout_width="32dp"
+                android:layout_height="32dp"
+                android:background="@android:color/transparent"
+                android:contentDescription="Siguiente"
+                android:scaleType="centerInside"
+                android:src="@drawable/ic_notif_next" />
+
+            <ImageButton
+                android:id="@+id/notif_btn_shuffle"
+                android:layout_width="32dp"
+                android:layout_height="32dp"
+                android:layout_marginStart="8dp"
+                android:background="@android:color/transparent"
+                android:contentDescription="Aleatorio"
+                android:scaleType="centerInside"
+                android:src="@drawable/ic_notif_shuffle" />
+
+            <ImageButton
+                android:id="@+id/notif_btn_favorite"
+                android:layout_width="32dp"
+                android:layout_height="32dp"
+                android:layout_marginStart="8dp"
+                android:background="@android:color/transparent"
+                android:contentDescription="Favorito"
+                android:scaleType="centerInside"
+                android:src="@drawable/ic_notif_thumb_up" />
+        </LinearLayout>
+    </LinearLayout>
+</FrameLayout>

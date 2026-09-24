@@ -1,9 +1,14 @@
 package com.example.ui.components
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Bedtime
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Search
@@ -23,11 +28,14 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.R
 
@@ -39,6 +47,8 @@ fun SamsungTopAppBar(
     onSearchQueryChange: (String) -> Unit,
     onToggleSearch: (Boolean) -> Unit,
     onOpenSoundAlive: () -> Unit,
+    onOpenSleepTimer: () -> Unit,
+    sleepTimerRemainingMs: Long? = null,
     onShowStats: () -> Unit,
     onCleanFolder: () -> Unit,
     onEnrichAll: () -> Unit,
@@ -91,6 +101,25 @@ fun SamsungTopAppBar(
                     )
                 }
 
+                IconButton(onClick = onOpenSleepTimer) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = Icons.Default.Bedtime,
+                            contentDescription = "Temporizador de apagado",
+                            tint = if (sleepTimerRemainingMs != null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onBackground
+                        )
+                        if (sleepTimerRemainingMs != null) {
+                            Box(
+                                modifier = Modifier
+                                    .align(Alignment.TopEnd)
+                                    .size(8.dp)
+                                    .clip(CircleShape)
+                                    .background(MaterialTheme.colorScheme.primary)
+                            )
+                        }
+                    }
+                }
+
                 IconButton(onClick = onOpenSoundAlive) {
                     Icon(
                         painter = painterResource(id = R.drawable.ic_equalizer),
@@ -111,6 +140,23 @@ fun SamsungTopAppBar(
                     expanded = showMenu,
                     onDismissRequest = { showMenu = false }
                 ) {
+                    DropdownMenuItem(
+                        text = {
+                            Text(if (sleepTimerRemainingMs != null) "Temporizador (activo)" else "Temporizador de apagado")
+                        },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = Icons.Default.Bedtime,
+                                contentDescription = null,
+                                modifier = Modifier.size(20.dp),
+                                tint = if (sleepTimerRemainingMs != null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                            )
+                        },
+                        onClick = {
+                            showMenu = false
+                            onOpenSleepTimer()
+                        }
+                    )
                     DropdownMenuItem(
                         text = { Text("Estadísticas de la biblioteca") },
                         onClick = {

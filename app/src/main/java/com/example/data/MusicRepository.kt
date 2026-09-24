@@ -82,6 +82,10 @@ class MusicRepository(
         songDao.setFavorite(songId, isFavorite)
     }
 
+    suspend fun updateCoverArt(songId: String, coverArtUrl: String) {
+        songDao.updateCoverArt(songId, coverArtUrl)
+    }
+
     suspend fun incrementPlayCount(songId: String) {
         songDao.incrementPlayCount(songId)
     }
