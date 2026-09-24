@@ -218,9 +218,35 @@ class SamsungMusicViewModel(application: Application) : AndroidViewModel(applica
         }
     }
 
+    /**
+     * Migración: elimina los "archivos de audio" sintéticos generados por versiones
+     * anteriores (un tono falso de 16 KB que no era música real). Tras la limpieza,
+     * si la biblioteca queda vacía, se resincroniza la playlist con descargas reales.
+     */
+    private suspend fun purgeLegacyFakeAudio() {
+        val songs = repository.allSongs.firstOrNull() ?: return
+        var purged = 0
+        for (song in songs) {
+            if (!song.id.startsWith("yt_")) continue
+            val f = File(song.filePath)
+            val esFalso = !f.exists() || f.length() < 10_000L
+            if (esFalso) {
+                song.lyricsPath?.let { File(it).delete() }
+                repository.deleteSong(song)
+                purged++
+            }
+        }
+        if (purged > 0) {
+            android.util.Log.i("SamsungMusic", "Purga de audios sintéticos: $purged canciones eliminadas")
+        }
+    }
+
     suspend fun seedInitialMusic() = withContext(Dispatchers.IO) {
         // Schedule daily background sync via WorkManager
         PlaylistSyncWorker.scheduleDailySync(getApplication())
+
+        // Limpia primero los archivos falsos de versiones anteriores
+        purgeLegacyFakeAudio()
 
         val currentSongsCount = repository.allSongs.firstOrNull()?.size ?: 0
         val currentPlaylistsCount = repository.getPlaylistCount()

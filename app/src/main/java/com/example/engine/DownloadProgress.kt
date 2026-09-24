@@ -6,6 +6,8 @@ data class DownloadProgress(
     val currentSongTitle: String = "",
     val totalItems: Int = 1,
     val currentItemIndex: Int = 0,
+    val bytesDownloaded: Long = 0L,
+    val bytesTotal: Long = 0L,
     val isFinished: Boolean = false,
     val error: String? = null
 )

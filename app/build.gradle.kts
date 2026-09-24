@@ -62,6 +62,9 @@ dependencies {
     implementation(libs.okhttp)
     implementation(libs.coil.compose)
 
+    // NewPipeExtractor: descarga real de audio desde YouTube
+    implementation(libs.newpipe.extractor)
+
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)

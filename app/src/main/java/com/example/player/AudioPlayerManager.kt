@@ -54,6 +54,14 @@ class AudioPlayerManager(private val context: Context) {
     private var hasCountedHalfPlay = false
     var onHalfPlayedCallback: ((String) -> Unit)? = null
 
+    /** Mensaje de error de reproducción (p. ej. archivo dañado o ausente). */
+    private val _playbackError = MutableStateFlow<String?>(null)
+    val playbackError: StateFlow<String?> = _playbackError.asStateFlow()
+
+    fun clearPlaybackError() {
+        _playbackError.value = null
+    }
+
     init {
         instance = this
     }
@@ -87,37 +95,48 @@ class AudioPlayerManager(private val context: Context) {
     }
 
     private fun startPlayback(song: Song) {
+        mediaPlayer?.release()
+        mediaPlayer = null
+        _currentPositionMs.value = 0L
+        _isPlaying.value = false
+
+        val file = File(song.filePath)
+        if (!file.exists() || file.length() == 0L) {
+            _playbackError.value = "El archivo de audio no está disponible. Vuelve a descargar la canción."
+            notifyForegroundService(false)
+            return
+        }
+
         try {
-            mediaPlayer?.release()
-            mediaPlayer = null
-
-            val file = File(song.filePath)
             val mp = MediaPlayer()
-            if (file.exists() && file.length() > 0) {
-                mp.setDataSource(file.absolutePath)
-                mp.prepare()
-            }
+            mp.setDataSource(file.absolutePath)
+            mp.prepare()
 
-            val actualDuration = if (mp.duration > 0) mp.duration.toLong() else song.durationSeconds * 1000L
+            val actualDuration = if (mp.duration > 0) mp.duration.toLong() else song.durationMs
             _durationMs.value = actualDuration
-            _currentPositionMs.value = 0L
 
             mp.setOnCompletionListener {
                 handleSongCompletion()
+            }
+            mp.setOnErrorListener { _, what, extra ->
+                _playbackError.value = "Error al reproducir (código $what/$extra)"
+                _isPlaying.value = false
+                notifyForegroundService(false)
+                true
             }
 
             mp.start()
             mediaPlayer = mp
             _isPlaying.value = true
+            _playbackError.value = null
             startProgressTicker()
             notifyForegroundService(true)
         } catch (e: Exception) {
             e.printStackTrace()
-            // Graceful fallback for synthetic demo playback
-            _isPlaying.value = true
-            _durationMs.value = song.durationSeconds * 1000L
-            startProgressTicker()
-            notifyForegroundService(true)
+            mediaPlayer?.release()
+            mediaPlayer = null
+            _playbackError.value = "No se pudo reproducir el audio: ${e.message ?: "archivo inválido"}"
+            notifyForegroundService(false)
         }
     }
 
@@ -307,9 +326,9 @@ class AudioPlayerManager(private val context: Context) {
         progressJob = scope.launch {
             while (isActive && _isPlaying.value) {
                 val pos = try {
-                    mediaPlayer?.currentPosition?.toLong() ?: (_currentPositionMs.value + 1000L)
+                    mediaPlayer?.currentPosition?.toLong() ?: _currentPositionMs.value
                 } catch (e: Exception) {
-                    _currentPositionMs.value + 1000L
+                    _currentPositionMs.value
                 }
 
                 _currentPositionMs.value = pos
@@ -319,15 +338,6 @@ class AudioPlayerManager(private val context: Context) {
                 if (!hasCountedHalfPlay && dur > 0 && pos >= (dur / 2)) {
                     hasCountedHalfPlay = true
                     _currentSong.value?.let { onHalfPlayedCallback?.invoke(it.id) }
-                }
-
-                if (pos >= dur && dur > 0) {
-                    // Solo para reproducción sintética (sin MediaPlayer real):
-                    // con MediaPlayer real el avance lo gestiona onCompletion.
-                    if (mediaPlayer == null) {
-                        handleSongCompletion()
-                    }
-                    break
                 }
 
                 delay(500L)

@@ -12,7 +12,6 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
-import java.io.FileOutputStream
 import java.net.URLEncoder
 import java.text.Normalizer
 import java.util.Locale
@@ -555,78 +554,91 @@ class MusicaEngine(private val context: Context) {
         }
     }
 
-    fun crearArchivoAudioDemo(file: File, trackTitle: String) {
-        try {
-            FileOutputStream(file).use { fos ->
-                fos.write(byteArrayOf(73, 68, 51, 3, 0, 0, 0, 0, 0, Byte.MAX_VALUE))
-                val buffer = ByteArray(16384)
-                for (i in buffer.indices) {
-                    buffer[i] = (((i * 440 * 2 * Math.PI) / 44100.0).toInt() and 0xFF).toByte()
-                }
-                fos.write(buffer)
-            }
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
-    }
-
+    /**
+     * Descarga REAL: resuelve el stream de audio con NewPipeExtractor, lo baja a
+     * disco con progreso en bytes, sondea la duración real del archivo y guarda
+     * letras sincronizadas reales obtenidas de LRCLIB.
+     */
     suspend fun procesarYGuardarAudio(
         videoId: String,
         titleYt: String,
         channelYt: String,
-        autoEnriquecer: Boolean
+        autoEnriquecer: Boolean,
+        onProgress: (DownloadProgress) -> Unit = {}
     ): Song = withContext(Dispatchers.IO) {
+        val cleanId = YouTubeAudioDownloader.normalizeVideoId(videoId)
         val meta = if (autoEnriquecer) {
-            enriquecerCancion(videoId, titleYt, channelYt)
+            enriquecerCancion(cleanId, titleYt, channelYt)
         } else {
             val clean = limpiarTexto(titleYt)
+            val partes = clean.split(" - ", limit = 2)
             EnrichmentResult(
-                title = clean,
-                artist = channelYt.ifBlank { "YouTube" },
-                album = "YouTube Downloads",
-                coverArtUrl = "https://img.youtube.com/vi/$videoId/hqdefault.jpg",
+                title = if (partes.size == 2) partes[1].trim() else clean,
+                artist = if (partes.size == 2) partes[0].trim() else channelYt.ifBlank { "YouTube" },
+                album = "YouTube Music",
+                coverArtUrl = "https://img.youtube.com/vi/$cleanId/hqdefault.jpg",
                 score = 65,
                 releaseId = null,
                 source = "YouTube"
             )
         }
 
-        val safeTitle = meta.title.replace(Regex("[^a-zA-Z0-9_ -]"), "_").take(40)
-        val targetFile = File(musicFolder, "${safeTitle}_${videoId.take(6)}.mp3")
-        if (!targetFile.exists() || targetFile.length() == 0L) {
-            crearArchivoAudioDemo(targetFile, meta.title)
+        val safeTitle = meta.title.replace(Regex("[^a-zA-Z0-9_ -]"), "_").take(40).trim()
+        val targetFile = File(musicFolder, "${safeTitle}_${cleanId.take(6)}.m4a")
+
+        val bytes: Long
+        if (!targetFile.exists() || targetFile.length() < 10_000L) {
+            bytes = YouTubeAudioDownloader.downloadToFile(
+                cleanId, context, targetFile
+            ) { written, total ->
+                onProgress(
+                    DownloadProgress(
+                        step = "Descargando audio…",
+                        percent = if (total > 0) (written.toFloat() / total) else 0f,
+                        currentSongTitle = meta.title,
+                        bytesDownloaded = written,
+                        bytesTotal = total
+                    )
+                )
+            }
+        } else {
+            bytes = targetFile.length()
         }
 
-        val durationSec = 180L
-        val lrcFile = File(musicFolder, "${safeTitle}_${videoId.take(6)}.lrc")
-        var hasLyrics = false
+        // Duración REAL sondeada del archivo descargado
+        val probedMs = YouTubeAudioDownloader.probeDurationMs(targetFile.absolutePath)
+        val durationMs = if (probedMs > 0) probedMs else 0L
+
+        // Letra real (sincronizada) desde LRCLIB usando la duración verdadera
+        val lrcFile = File(musicFolder, "${safeTitle}_${cleanId.take(6)}.lrc")
         if (!lrcFile.exists()) {
-            val demoText = "${meta.title}\n${meta.artist}\nSamsung Music Player\nOne UI Audio Experience"
-            val demoLrc = LrcParser.convertPlainToLrc(demoText, durationSec)
-            LrcParser.saveLrc(lrcFile, demoLrc)
-            hasLyrics = true
-        } else {
-            hasLyrics = true
+            val lrc = LrcParser.fetchLrcFromApi(meta.title, meta.artist, durationMs / 1000)
+            if (lrc.isNullOrBlank()) {
+                // Marcador vacío para no reintentar en cada arranque
+                try { lrcFile.createNewFile() } catch (_: Exception) {}
+            } else {
+                LrcParser.saveLrc(lrcFile, lrc)
+            }
         }
 
         Song(
-            id = "yt_$videoId",
+            id = "yt_$cleanId",
             title = meta.title,
             artist = meta.artist,
             album = meta.album,
-            durationMs = durationSec * 1000L,
+            durationMs = durationMs,
             filePath = targetFile.absolutePath,
-            fileSizeBytes = targetFile.length(),
-            coverArtUrl = meta.coverArtUrl ?: "https://img.youtube.com/vi/$videoId/hqdefault.jpg",
+            fileSizeBytes = bytes,
+            coverArtUrl = meta.coverArtUrl ?: "https://img.youtube.com/vi/$cleanId/hqdefault.jpg",
             isFavorite = false,
             playCount = 0,
             dateAdded = System.currentTimeMillis(),
             lastPlayedAt = null,
             enrichmentScore = meta.score,
             releaseId = meta.releaseId,
-            lrcFilePath = if (hasLyrics) lrcFile.absolutePath else null,
+            lrcFilePath = lrcFile.absolutePath,
             isDownloaded = true,
-            youtubeVideoId = videoId,
+            youtubeVideoId = cleanId,
             youtubeChannel = channelYt
         )
     }
@@ -651,9 +663,9 @@ class MusicaEngine(private val context: Context) {
             }
 
             for ((index, item) in items.withIndex()) {
-                val currentPercent = (index.toFloat() / total.toFloat()) * 0.95f + 0.05f
+                val basePercent = (index.toFloat() / total.toFloat())
+                val currentPercent = basePercent * 0.95f + 0.05f
 
-                // Interruption & resume check: if already processed and file exists, skip!
                 val alreadyDone = isAlreadyDownloaded?.invoke(item.videoId) ?: false
                 if (alreadyDone) {
                     onProgress(
@@ -668,20 +680,42 @@ class MusicaEngine(private val context: Context) {
                     continue
                 }
 
+                // Descarga real con progreso de bytes por canción
+                val song = try {
+                    procesarYGuardarAudio(item.videoId, item.title, item.channel, autoEnriquecer) { p ->
+                        val songFraction = p.percent * (0.95f / total.toFloat())
+                        onProgress(
+                            p.copy(
+                                percent = currentPercent + songFraction,
+                                currentSongTitle = p.currentSongTitle.ifBlank { item.title },
+                                totalItems = total,
+                                currentItemIndex = index + 1
+                            )
+                        )
+                    }
+                } catch (e: Exception) {
+                    onProgress(
+                        DownloadProgress(
+                            step = "Sin audio disponible: ${item.title}",
+                            percent = currentPercent,
+                            currentSongTitle = item.title,
+                            totalItems = total,
+                            currentItemIndex = index + 1
+                        )
+                    )
+                    continue
+                }
+
+                downloadedSongs.add(song)
                 onProgress(
                     DownloadProgress(
-                        step = "Descargando (${index + 1}/$total): ${item.title}",
+                        step = "Guardada (${index + 1}/$total): ${item.title}",
                         percent = currentPercent,
                         currentSongTitle = item.title,
                         totalItems = total,
                         currentItemIndex = index + 1
                     )
                 )
-
-                val song = procesarYGuardarAudio(item.videoId, item.title, item.channel, autoEnriquecer)
-                downloadedSongs.add(song)
-
-                // Persist immediately on each song to support interruption resume
                 onSongSaved?.invoke(song)
             }
 
@@ -695,10 +729,29 @@ class MusicaEngine(private val context: Context) {
                 )
             )
         } else if (videoId != null) {
-            onProgress(DownloadProgress(step = "Obteniendo información del video...", percent = 0.2f))
+            onProgress(DownloadProgress(step = "Obteniendo información del video...", percent = 0.05f))
             val title = obtenerTituloVideo(videoId) ?: "Canción de YouTube"
-            onProgress(DownloadProgress(step = "Procesando audio: $title", percent = 0.5f, currentSongTitle = title))
-            val song = procesarYGuardarAudio(videoId, title, "YouTube", autoEnriquecer)
+            val song = try {
+                procesarYGuardarAudio(videoId, title, "YouTube", autoEnriquecer) { p ->
+                    onProgress(
+                        p.copy(
+                            percent = 0.05f + p.percent * 0.9f,
+                            totalItems = 1,
+                            currentItemIndex = 1
+                        )
+                    )
+                }
+            } catch (e: Exception) {
+                onProgress(
+                    DownloadProgress(
+                        step = "No se pudo descargar el audio",
+                        percent = 1.0f,
+                        isFinished = true,
+                        error = e.message ?: "Error de descarga"
+                    )
+                )
+                return@withContext emptyList()
+            }
             downloadedSongs.add(song)
             onSongSaved?.invoke(song)
             onProgress(DownloadProgress(step = "¡Canción descargada con éxito!", percent = 1.0f, isFinished = true, currentSongTitle = title))

@@ -383,12 +383,21 @@ private fun DownloadStatusCard(progress: DownloadProgress) {
                     )
                 }
                 if (!isDone && !hasError) {
-                    Text(
-                        text = "${(progress.percent * 100).toInt()}%",
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 14.sp,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer
-                    )
+                    Column(horizontalAlignment = Alignment.End) {
+                        Text(
+                            text = "${(progress.percent * 100).toInt()}%",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 14.sp,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
+                        if (progress.bytesTotal > 0) {
+                            Text(
+                                text = "${formatBytes(progress.bytesDownloaded)} / ${formatBytes(progress.bytesTotal)}",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
+                            )
+                        }
+                    }
                 }
             }
 
@@ -450,6 +459,14 @@ private fun DownloadStatusCard(progress: DownloadProgress) {
                 )
             }
         }
+    }
+}
+
+private fun formatBytes(bytes: Long): String {
+    return when {
+        bytes >= 1_000_000 -> String.format(Locale.US, "%.1f MB", bytes / 1_000_000.0)
+        bytes >= 1_000 -> "${bytes / 1_000} kB"
+        else -> "$bytes B"
     }
 }
 
