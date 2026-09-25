@@ -226,7 +226,19 @@ class SamsungMusicViewModel(application: Application) : AndroidViewModel(applica
 
     fun updateSongCoverArt(songId: String, newCoverPath: String) {
         viewModelScope.launch(Dispatchers.IO) {
+            val song = repository.getSongById(songId)
             repository.updateCoverArt(songId, newCoverPath)
+            // Limpieza: la portada ANTERIOR local ya no sirve. Si era un archivo
+            // interno de la app (covers/cover_*.jpg) se borra para no acumular
+            // megas huérfanos. URLs remotas (http/img.youtube) no se tocan.
+            try {
+                val old = song?.coverArtUrl
+                if (!old.isNullOrBlank() && old != newCoverPath && old.startsWith("/")) {
+                    val f = File(old)
+                    if (f.exists() && f.name.startsWith("cover_")) f.delete()
+                }
+            } catch (_: Exception) {
+            }
             withContext(Dispatchers.Main) {
                 if (playerManager.currentSong.value?.id == songId) {
                     playerManager.updateCurrentSongCover(newCoverPath)
@@ -498,28 +510,83 @@ class SamsungMusicViewModel(application: Application) : AndroidViewModel(applica
             // audio (duración y tamaño casi idénticos: la misma canción descargada
             // dos veces con nombres de archivo viejos distintos). Conserva la fila
             // con el archivo más grande. NUNCA aplica a filas con datos reales.
+            fun sameAudio(a: Song, b: Song): Boolean {
+                val dDur = kotlin.math.abs(a.durationMs - b.durationMs)
+                val maxDur = maxOf(a.durationMs, b.durationMs, 1L)
+                if (dDur > 1_500 && dDur.toDouble() / maxDur > 0.03) return false
+                val sa = a.fileSizeBytes
+                val sb = b.fileSizeBytes
+                if (sa <= 0 || sb <= 0) return true // sin tamaño: confía en la duración
+                val dSize = kotlin.math.abs(sa - sb)
+                return dSize.toDouble() / maxOf(sa, sb) <= 0.02
+            }
             val leftover3 = groups.values.flatten().filter { it.id !in consumed }
             val weakByTitle = leftover3.filter { it.isPlaceholder() }
                 .groupBy { norm(it.title) }
                 .filter { it.key.isNotBlank() }
             for ((_, wGroup) in weakByTitle) {
                 if (wGroup.size < 2) continue
-                fun sameAudio(a: Song, b: Song): Boolean {
-                    val dDur = kotlin.math.abs(a.durationMs - b.durationMs)
-                    val maxDur = maxOf(a.durationMs, b.durationMs, 1L)
-                    if (dDur > 1_500 && dDur.toDouble() / maxDur > 0.03) return false
-                    val sa = a.fileSizeBytes
-                    val sb = b.fileSizeBytes
-                    if (sa <= 0 || sb <= 0) return true // sin tamaño: confía en la duración
-                    val dSize = kotlin.math.abs(sa - sb)
-                    return dSize.toDouble() / maxOf(sa, sb) <= 0.02
-                }
                 val keep = wGroup.maxByOrNull { it.fileSizeBytes * 1000 + it.dateAdded / 1000 } ?: continue
                 for (dupe in wGroup) {
                     if (dupe.id == keep.id || dupe.id in consumed) continue
                     if (!sameAudio(keep, dupe)) continue
                     mergeInto(keep, dupe)
                     consumed.add(dupe.id)
+                }
+            }
+
+            // FASE 2d: dos filas FUERTES con el MISMO título+artista y el mismo
+            // audio (una descargada con Letra y otra Sin letra, por ejemplo).
+            // El título+artista idéntico + misma duración/tamaño es prueba
+            // suficiente de que es la misma pista; conserva la que tenga portada.
+            // NO aplica a filas con IDs de YouTube distintos (podrían ser versiones
+            // distintas de verdad).
+            val strongByKey = leftover3.filter { !it.isPlaceholder() }
+                .groupBy { norm(it.title) + "|||" + norm(it.artist) }
+                .filter { it.key.isNotBlank() && !it.key.startsWith("|||") }
+            for ((_, sGroup) in strongByKey) {
+                if (sGroup.size < 2) continue
+                val ids = sGroup.mapNotNull { it.youtubeVideoId }.distinct()
+                if (ids.size > 1) continue // distintos videos: no tocar
+                val keep = sGroup.maxByOrNull { songScore(it) * 1000 + it.fileSizeBytes / 1024 } ?: continue
+                for (dupe in sGroup) {
+                    if (dupe.id == keep.id || dupe.id in consumed) continue
+                    if (!sameAudio(keep, dupe)) continue
+                    mergeInto(keep, dupe)
+                    consumed.add(dupe.id)
+                }
+            }
+
+            // FASE 2e: débil cuyo título es la fila fuerte + sufijo basura
+            // ("Milagro K1V9" vs "Milagro"): el sufijo alfanumérico pegado tras
+            // un espacio (5-7 chars sin vocales repetidas típico de hashes) no
+            // forma parte del nombre real. Solo si hay una fila fuerte cuyo título
+            // normalizado es prefijo del débil y el audio coincide.
+            val strongTitles = leftover3.filter { !it.isPlaceholder() }
+                .map { norm(it.title) }.filter { it.length >= 4 }.toSet()
+            val junkSuffix = Regex("^(.+)\\s+[a-z0-9]{4,8}$")
+            val weakWithJunk = leftover3.filter {
+                it.isPlaceholder() && it.id !in consumed
+            }
+            for (weak in weakWithJunk) {
+                val nt = norm(weak.title)
+                val m = junkSuffix.find(weak.title.trim()) ?: continue
+                val base = norm(m.groupValues[1])
+                if (base.length < 4) continue
+                if (base !in strongTitles && base != nt) {
+                    // ¿Existe alguna fuerte cuyo título normalizado sea el prefijo?
+                    val matched = leftover3.any {
+                        !it.isPlaceholder() && (norm(it.title) == base) && sameAudio(it, weak)
+                    }
+                    if (!matched) continue
+                }
+                val strongMatch = leftover3.filter {
+                    !it.isPlaceholder() && it.id !in consumed &&
+                            (norm(it.title) == base || norm(it.title) == nt)
+                }.maxByOrNull { songScore(it) } ?: continue
+                if (sameAudio(strongMatch, weak)) {
+                    mergeInto(strongMatch, weak)
+                    consumed.add(weak.id)
                 }
             }
 
@@ -740,15 +807,40 @@ class SamsungMusicViewModel(application: Application) : AndroidViewModel(applica
                         } else {
                             null
                         }
-                    if (result != null) {
+                    // Anti "autores inventados": si el match no convence (score
+                    // bajo) o el artista MB poco se parece al que ya teníamos de
+                    // YouTube, se descarta y se conserva el dato de YouTube — el
+                    // canal (sin "- Topic") es mejor pista que un falso positivo.
+                    val mbArtistLooksWrong = result != null &&
+                            result.score < 90 &&
+                            song.artist.isNotBlank() &&
+                            !song.artist.equals("Artista desconocido", ignoreCase = true) &&
+                            !song.artist.equals("Samsung Music", ignoreCase = true) &&
+                            song.artist != result.artist &&
+                            engine.fuzzyRatio(song.artist, result.artist) < 60
+                    val finalResult = if (mbArtistLooksWrong) null else result
+                    if (finalResult != null) {
                         repository.updateMetadata(
                             id = song.id,
-                            title = result.title,
-                            artist = result.artist,
-                            album = result.album,
-                            coverArtUrl = result.coverArtUrl ?: song.coverArtUrl,
-                            score = result.score,
-                            releaseId = result.releaseId
+                            title = finalResult.title,
+                            artist = finalResult.artist,
+                            album = finalResult.album,
+                            coverArtUrl = finalResult.coverArtUrl ?: song.coverArtUrl,
+                            score = finalResult.score,
+                            releaseId = finalResult.releaseId
+                        )
+                    } else if (result != null) {
+                        // Match MB rechazado: al menos corrige título/artista con
+                        // el dato de YouTube y marca score bajo para no reintentar.
+                        val ytFallback = engine.fallbackFromYouTube(song.youtubeVideoId ?: "", song.title, song.youtubeChannel ?: "")
+                        repository.updateMetadata(
+                            id = song.id,
+                            title = ytFallback.first.ifBlank { song.title },
+                            artist = ytFallback.second.ifBlank { song.artist },
+                            album = song.album,
+                            coverArtUrl = song.coverArtUrl,
+                            score = 85,
+                            releaseId = null
                         )
                     }
                     // Cortesía con la API pública de MusicBrainz (~1 req/seg).

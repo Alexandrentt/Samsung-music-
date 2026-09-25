@@ -42,7 +42,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.platform.LocalContext
 import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import com.example.R
 import com.example.data.Song
 
@@ -109,7 +111,11 @@ fun SongItemRow(
         }
 
         AsyncImage(
-            model = song.coverArtUrl ?: R.drawable.ic_launcher_foreground,
+            model = ImageRequest.Builder(LocalContext.current)
+                .data(song.coverArtUrl ?: R.drawable.ic_launcher_foreground)
+                .size(156) // 52dp * 3xx density: decode pequeño = scroll fluido
+                .crossfade(true)
+                .build(),
             contentDescription = song.title,
             modifier = Modifier
                 .size(52.dp)

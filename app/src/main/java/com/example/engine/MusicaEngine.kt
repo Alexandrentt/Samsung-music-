@@ -337,6 +337,26 @@ class MusicaEngine(private val context: Context) {
         )
     }
 
+    /**
+     * Dato de respaldo derivado del título/canal de YouTube (sin red):
+     * "Artista - Título" del nombre, o el canal sin "- Topic". Se usa cuando
+     * MusicBrainz no convence para no "inventar" autores.
+     */
+    fun fallbackFromYouTube(videoId: String, tituloYt: String, canal: String): Pair<String, String> {
+        val limpio = limpiarTexto(tituloYt)
+        val partes = limpio.split(" - ", " – ", " — ", limit = 2)
+        val title = if (partes.size == 2) partes[1].trim() else limpio
+        val artist = if (partes.size == 2) {
+            partes[0].trim()
+        } else {
+            canal.replace(Regex("(?i)\\s*-\\s*topic\\s*$"), "")
+                .replace(Regex("(?i)\\s*(VEVO|oficial|official|music|records?|topic)\\s*"), " ")
+                .trim()
+                .ifBlank { "Artista desconocido" }
+        }
+        return Pair(title, artist)
+    }
+
     fun extraerInfoUrl(url: String): Pair<String?, String?> {
         val playlistMatcher = Pattern.compile("[?&]list=([a-zA-Z0-9_-]+)").matcher(url)
         val playlistId = if (playlistMatcher.find()) playlistMatcher.group(1) else null

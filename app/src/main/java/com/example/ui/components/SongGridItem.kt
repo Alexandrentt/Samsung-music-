@@ -37,7 +37,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.platform.LocalContext
 import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import com.example.R
 import com.example.data.Song
 
@@ -68,7 +70,11 @@ fun SongGridItem(
                 .clip(RoundedCornerShape(14.dp))
         ) {
             AsyncImage(
-                model = song.coverArtUrl ?: R.drawable.ic_launcher_foreground,
+                model = ImageRequest.Builder(LocalContext.current)
+                    .data(song.coverArtUrl ?: R.drawable.ic_launcher_foreground)
+                    .size(450) // celda ~150dp * 3x: decode contenido al viewport
+                    .crossfade(true)
+                    .build(),
                 contentDescription = song.title,
                 modifier = Modifier.fillMaxSize(),
                 contentScale = ContentScale.Crop
