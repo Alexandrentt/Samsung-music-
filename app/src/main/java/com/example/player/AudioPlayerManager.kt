@@ -332,35 +332,41 @@ class AudioPlayerManager(private val context: Context) {
     }
 
     fun playSong(song: Song, newQueue: List<Song> = emptyList()) {
-        if (newQueue.isNotEmpty()) {
-            _queue.value = newQueue
-        } else if (!_queue.value.any { it.id == song.id }) {
-            _queue.value = _queue.value + song
-        }
+        try {
+            if (newQueue.isNotEmpty()) {
+                _queue.value = newQueue
+            } else if (!_queue.value.any { it.id == song.id }) {
+                _queue.value = _queue.value + song
+            }
 
-        _currentSong.value = song
-        hasCountedHalfPlay = false
-        loadLyricsForSong(song)
+            _currentSong.value = song
+            hasCountedHalfPlay = false
+            loadLyricsForSong(song)
 
-        val file = File(song.filePath)
-        if (file.exists() && file.length() > 1000L) {
-            startPlayback(song)
-        } else {
-            // Si el archivo físico aún no está listo o falló anteriormente, se asegura de inmediato
-            _playbackError.value = "Preparando audio…"
-            scope.launch(Dispatchers.IO) {
-                val preparedSong = ensureSongAudioFile(song)
-                withContext(Dispatchers.Main) {
-                    if (preparedSong != null) {
-                        _currentSong.value = preparedSong
-                        _playbackError.value = null
-                        startPlayback(preparedSong)
-                    } else {
-                        _playbackError.value = "No se pudo preparar el audio para esta canción."
-                        notifyForegroundService(false)
+            val file = File(song.filePath)
+            if (file.exists() && file.length() > 1000L) {
+                startPlayback(song)
+            } else {
+                // Si el archivo físico aún no está listo o falló anteriormente, se asegura de inmediato
+                _playbackError.value = "Preparando audio…"
+                scope.launch(Dispatchers.IO) {
+                    val preparedSong = ensureSongAudioFile(song)
+                    withContext(Dispatchers.Main) {
+                        if (preparedSong != null) {
+                            _currentSong.value = preparedSong
+                            _playbackError.value = null
+                            startPlayback(preparedSong)
+                        } else {
+                            _playbackError.value = "No se pudo preparar el audio para esta canción."
+                            notifyForegroundService(false)
+                        }
                     }
                 }
             }
+        } catch (e: Exception) {
+            // Nunca dejar que un error de reproducción tumbe el proceso entero.
+            android.util.Log.e("AudioPlayerManager", "Error al iniciar reproducción", e)
+            _playbackError.value = "No se pudo reproducir: ${e.message ?: "error desconocido"}"
         }
     }
 
@@ -375,8 +381,13 @@ class AudioPlayerManager(private val context: Context) {
         }
 
         try {
+            // El ID del video debe ser válido (11 caracteres); si la canción no
+            // viene de YouTube no hay nada que re-descargar.
+            val cleanId = song.youtubeVideoId
+            if (cleanId.isNullOrBlank() || !Regex("[a-zA-Z0-9_-]{11}").matches(cleanId)) {
+                return@withContext null
+            }
             target.parentFile?.mkdirs()
-            val cleanId = song.youtubeVideoId ?: song.id.removePrefix("yt_")
             val written = YouTubeAudioDownloader.downloadToFile(
                 videoId = cleanId,
                 context = context,
@@ -444,7 +455,13 @@ class AudioPlayerManager(private val context: Context) {
             _durationMs.value = actualDuration
 
             mp.setOnCompletionListener {
-                handleSongCompletion()
+                // Callback del hilo del sistema: cualquier excepción aquí mata
+                // el proceso y se percibe como "la app se cierra sola".
+                try {
+                    handleSongCompletion()
+                } catch (e: Exception) {
+                    android.util.Log.e("AudioPlayerManager", "Error al pasar a la siguiente canción", e)
+                }
             }
             mp.setOnErrorListener { _, what, extra ->
                 _playbackError.value = "Error de reproducción ($what/$extra)"
