@@ -4,6 +4,37 @@ Registro de cambios de la app Android "Música". Cada versión se publica
 automáticamente en GitHub Releases (CI "Build Android APK") y como
 `samsung-music.apk` en la raíz del repositorio.
 
+## 2.3 (versionCode 14) — 2026-09-25
+
+### Duplicados con código al final (raíz corregida)
+- Al escanear, los nombres con sufijo basura ("Sunsetz 5-rbSNzU",
+  "fanshop supernova mZyXw1") se limpian ANTES de crear la fila y, si el
+  sufijo es un ID de YouTube real, se deriva el ID canónico: la fila del
+  escaneo nace con la MISMA clave que la canónica → REPLACE, no duplicado.
+- `parseMediaFileName` centraliza el parsing (con pruebas unitarias
+  nuevas `SongMatchingTest`): ID canónico, ID truncado y sufijos basura.
+  Los títulos reales no se tocan ("Verano 2024", "Song 2").
+
+### Reescaneo
+- Ahora también escanea la carpeta SAF elegida por el usuario, no solo
+  /Music/SamsungMusic y la interna.
+- Y purga las PORTADAS huérfanas (covers/cover_*.jpg que ya no usa
+  ninguna fila): respondía el usuario que "siguen guardadas en algún
+  lado". El resumen del reescaneo informa cuántas se borraron.
+
+### Arranque
+- Secuencial y estable: recuperar → fusionar duplicados → migrar
+  metadatos → purgar portadas → enriquecer con MusicBrainz. Antes las
+  correcciones corrían en paralelo y se deshacían entre sí.
+- El dedupe agrupa por videoId / filePath / título SIN sufijo basura
+  (`SongMatching.titleKey`), con fusión débil↔fuerte por prefijo o typo
+  (ratio ≥82). Nunca fusiona filas con videoIds reales distintos.
+
+### Playbar
+- Fuera el hueco izquierdo fijo con la nota musical (el "espacio muerto"):
+  miniatura de portada solo si existe; sin portada el texto arranca donde
+  empieza la barra y los tres botones conservan su tamaño completo.
+
 ## 2.0 (versionCode 11) — 2026-09-25
 
 ### Rendimiento

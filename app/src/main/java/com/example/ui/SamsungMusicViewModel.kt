@@ -14,6 +14,7 @@ import com.example.data.MusicStatistics
 import com.example.data.Playlist
 import com.example.data.PlaylistWithSongs
 import com.example.data.Song
+import com.example.data.SongMatching
 import com.example.engine.DownloadProgress
 import com.example.engine.MusicaEngine
 import com.example.player.AudioPlayerManager
@@ -356,107 +357,114 @@ class SamsungMusicViewModel(application: Application) : AndroidViewModel(applica
         viewModelScope.launch {
             seedInitialMusic()
         }
-        // Migración: el fallback antiguo ponía album="YouTube Music"; ese texto
-        // no es un álbum. Album neutro; el artista real lo trae MusicBrainz.
+        // ARRANQUE SECUENCIAL (antes corrían 3 correcciones en paralelo y se
+        // tapaban entre sí: la recuperación insertaba mientras el dedupe
+        // agrupaba, y la migración reescribía filas ya fusionadas):
+        //   1. recuperar canciones del almacenamiento (REPLACE, clave canónica)
+        //   2. fusionar duplicados
+        //   3. migrar placeholders de metadatos
+        //   4. purgar portadas huérfanas
+        // El enriquecimiento MusicBrainz corre AL FINAL, ya con la biblioteca
+        // estable, para no metadatar filas que luego serán eliminadas.
         viewModelScope.launch(Dispatchers.IO) {
+            recoverExistingSongsBlocking()
+            dedupeExistingSongs()
+            migrateLegacyPlaceholders()
+            deleteOrphanCoverFiles()
+            autoEnrichRunning.set(true)
             try {
-                val songs = repository.allSongs.firstOrNull() ?: return@launch
-                for (s in songs) {
-                    if (s.album.equals("YouTube Music", ignoreCase = true)) {
-                        repository.updateMetadata(
-                            id = s.id,
-                            title = s.title,
-                            artist = s.artist,
-                            album = "Descargas",
-                            coverArtUrl = s.coverArtUrl,
-                            score = s.enrichmentScore,
-                            releaseId = s.releaseId
-                        )
-                    }
-                }
-            } catch (_: Exception) {
+                autoEnrichInternal()
+            } finally {
+                autoEnrichRunning.set(false)
             }
         }
-        recoverExistingSongs()
-        viewModelScope.launch(Dispatchers.IO) { dedupeExistingSongs() }
-        autoEnrichExistingSongs()
-        observePlaylistForWidget()    }
+        observePlaylistForWidget()
+    }
+
+    /**
+     * Recupera las canciones ya descargadas escaneando TODAS las carpetas
+     * conocidas: /Music/SamsungMusic (pública), la app-specific y la carpeta
+     * SAF elegida por el usuario (si la hay). Inserta con REPLACE: la fila
+     * del escaneo repara el filePath/lrc de la fila canónica en vez de
+     * chocar con ella.
+     */
+    private suspend fun recoverExistingSongsBlocking() {
+        try {
+            val existing = repository.allSongs.firstOrNull() ?: emptyList()
+            // PERF: evita re-probar (MediaPlayer) archivos cuyo tamaño ya está en la BD
+            val knownSizes = existing.mapNotNull { s ->
+                if (s.fileSizeBytes > 0) s.fileSizeBytes to s.fileSizeBytes else null
+            }.toMap()
+            val recovered = engine.scanAndRecoverExistingSongs(knownSizes).toMutableList()
+            val folderUri = userFolderUri()
+            if (!folderUri.isNullOrBlank()) {
+                recovered += engine.scanUserFolder(folderUri, knownSizes)
+            }
+            for (song in recovered) {
+                repository.insertSong(song) // REPLACE por id canónico
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
 
     /**
      * Fusión de duplicados (migración automática al arrancar).
      *
-     * Agrupa canciones que apuntan al MISMO audio por, en orden:
-     *  1. youtubeVideoId (ID canónico de 11 caracteres)
-     *  2. filePath (mismo archivo físico)
-     *  3. título normalizado (sin acentos/mayúsculas) — captura las filas
-     *     viejas con ID de 6 caracteres ("perd n" vs "perdón")
+     * Antes del matching se aplica [SongMatching.stripJunkSuffix] a cada título:
+     * "Sunsetz 5-rbSNzU" y "fanshop supernova mZyXw1" se agrupan con sus filas
+     * canónicas — es la causa de los "duplicados con un código al final".
      *
-     * Conserva la fila con mejor metadato (portada + mayor score) como
-     * sobreviviente, transfiere favoritos/playcount y las referencias de
-     * playlists de las demás, borra las filas duplicadas y elimina archivos
-     * huéfanos que ya no apunta ninguna fila.
+     * Agrupa por: 1) youtubeVideoId, 2) filePath, 3) título normalizado +
+     * audio compatible. NUNCA fusiona dos filas con videoIds reales distintos.
+     * Conserva la fila con mejor metadato, transfiere favoritos/playcount/
+     * playlists y elimina del disco los archivos que ya no apunta ninguna fila.
      */
     private suspend fun dedupeExistingSongs(): Pair<Int, Int> {
         return try {
             val songs = repository.allSongs.firstOrNull() ?: return Pair(0, 0)
             if (songs.size < 2) return Pair(0, 0)
 
-            fun norm(s: String): String = java.text.Normalizer.normalize(s, java.text.Normalizer.Form.NFD)
-                .replace(Regex("\\p{InCombiningDiacriticalMarks}+"), "")
-                .lowercase().replace(Regex("[^a-z0-9]"), "").trim()
-
             fun songScore(s: Song): Int =
                 (if (!s.coverArtUrl.isNullOrBlank()) 100 else 0) + s.enrichmentScore
 
-            val id11 = Regex("[a-zA-Z0-9_-]{11}")
+            val id11 = Regex("[A-Za-z0-9_-]{11}")
 
             // Fila débil: sin ID de 11 chars, o con metadatos placeholder
             fun Song.isPlaceholder(): Boolean =
                 youtubeVideoId.isNullOrBlank() || !id11.matches(youtubeVideoId!!) ||
                         artist.equals("Artista desconocido", ignoreCase = true) ||
                         artist.equals("Samsung Music", ignoreCase = true) ||
-                        album.equals("Descargas", ignoreCase = true) ||
-                        album.equals("Samsung Music", ignoreCase = true)
+                        album.equals("Descargas", ignoreCase = true)
 
-            // Similitud 0..100 (Levenshtein) para agrupar "perd n"/"perdon"
-            fun fuzzyRatio(s1: String, s2: String): Int {
-                if (s1 == s2) return 100
-                val len1 = s1.length
-                val len2 = s2.length
-                if (len1 == 0 || len2 == 0) return 0
-                val d = Array(len1 + 1) { IntArray(len2 + 1) }
-                for (i in 0..len1) d[i][0] = i
-                for (j in 0..len2) d[0][j] = j
-                for (i in 1..len1) for (j in 1..len2) {
-                    d[i][j] = minOf(
-                        d[i - 1][j] + 1,
-                        d[i][j - 1] + 1,
-                        d[i - 1][j - 1] + if (s1[i - 1] == s2[j - 1]) 0 else 1
-                    )
-                }
-                return (((maxOf(len1, len2) - d[len1][len2]).toDouble() / maxOf(len1, len2)) * 100).toInt()
-            }
-
-            val groups = mutableMapOf<String, MutableList<Song>>()
+            val groups = LinkedHashMap<String, MutableList<Song>>()
+            val fileKeyOwners = HashMap<String, String>()
             for (s in songs) {
+                val vk = s.youtubeVideoId
                 val key = when {
-                    !s.youtubeVideoId.isNullOrBlank() && id11.matches(s.youtubeVideoId!!) ->
-                        "v_" + s.youtubeVideoId!!
-                    s.filePath.isNotBlank() ->
-                        "f_" + s.filePath
-                    else ->
-                        "t_" + norm(s.title).ifBlank { "x_" + s.id }
+                    !vk.isNullOrBlank() && id11.matches(vk) -> "v_$vk"
+                    s.filePath.isNotBlank() -> {
+                        val owner = fileKeyOwners[s.filePath]
+                        if (owner != null) owner
+                        else "f_${s.filePath}".also { fileKeyOwners[s.filePath] = it }
+                    }
+                    else -> "t_" + SongMatching.titleKey(s.title).ifBlank { "x_" + s.id }
                 }
                 groups.getOrPut(key) { mutableListOf() }.add(s)
             }
             val consumed = mutableSetOf<String>()
 
-            // FASE 2: mezcla por título normalizado cuando el grupo cruza
-            // débil/fuerte (una fila con ID/metadata real + una placeholder),
-            // aunque el videoId difiera. NUNCA elimina dos filas con datos
-            // reales aunque compartan título.
+            suspend fun mergeAndConsume(survivor: Song, dupe: Song) {
+                if (dupe.id == survivor.id || dupe.id in consumed) return
+                mergeInto(survivor, dupe)
+                consumed.add(dupe.id)
+            }
+
+            // FASE 2: título normalizado y SIN sufijo basura (titleKey) cruzando
+            // débil/fuerte, aunque el videoId difiera. NUNCA elimina dos filas
+            // con datos reales aunque compartan título.
             val leftover = groups.values.flatten().filter { it.id !in consumed }
-            val byTitle = leftover.groupBy { "t_" + norm(it.title).ifBlank { "x_" + it.id } }
+            val byTitle = leftover.groupBy { "t_" + SongMatching.titleKey(it.title).ifBlank { "x_" + it.id } }
             for ((_, tGroup) in byTitle) {
                 if (tGroup.size < 2) continue
                 val hasStrong = tGroup.any { !it.isPlaceholder() }
@@ -464,135 +472,41 @@ class SamsungMusicViewModel(application: Application) : AndroidViewModel(applica
                 if (hasStrong && hasWeak) {
                     val survivor = tGroup.maxByOrNull { songScore(it) } ?: continue
                     for (dupe in tGroup) {
-                        if (dupe.id == survivor.id || dupe.id in consumed) continue
-                        if (!dupe.isPlaceholder()) continue
-                        mergeInto(survivor, dupe)
-                        consumed.add(dupe.id)
+                        if (dupe.isPlaceholder()) mergeAndConsume(survivor, dupe)
                     }
                 }
             }
 
-            // FASE 2b: fusión aproximada para títulos con typo/carácter perdido
-            // ("perd n" vs "perdon" → normalizados "perdn"/"perdon"). Solo si el
-            // grupo aproximará cruzado débil/fuerte; nunca borra filas con datos reales.
-            val fuzzyKeys = mutableMapOf<String, String>()
-            fun fuzzyKey(normTitle: String): String {
-                // Umbral 80: "perdn"/"perdon" dan 83. Longitud mínima 5 evita
-                // colisiones triviales de palabras cortas.
-                if (normTitle.length < 5) return "t_" + normTitle
-                fuzzyKeys.entries.firstOrNull { (k, _) -> fuzzyRatio(normTitle, k) >= 80 }
-                    ?.let { return it.value }
-                fuzzyKeys[normTitle] = "t_" + normTitle
-                return "t_" + normTitle
-            }
-            val leftover2 = groups.values.flatten().filter { it.id !in consumed }
-            val byFuzzy = LinkedHashMap<String, MutableList<Song>>()
-            for (s in leftover2) {
-                val nt = norm(s.title)
-                if (nt.isBlank()) continue
-                byFuzzy.getOrPut(fuzzyKey(nt)) { mutableListOf() }.add(s)
-            }
-            for ((_, fGroup) in byFuzzy) {
-                if (fGroup.size < 2) continue
-                val weaks = fGroup.filter { it.isPlaceholder() }
-                val strongs = fGroup.filter { !it.isPlaceholder() }
-                if (weaks.isEmpty() || strongs.isEmpty()) continue
-                val survivor = fGroup.maxByOrNull { songScore(it) } ?: continue
-                for (dupe in fGroup) {
-                    if (dupe.id == survivor.id || dupe.id in consumed) continue
-                    if (!dupe.isPlaceholder()) continue
-                    mergeInto(survivor, dupe)
-                    consumed.add(dupe.id)
-                }
-            }
-
-            // FASE 2c: dos filas DÉBILES con el mismo título que apuntan al mismo
-            // audio (duración y tamaño casi idénticos: la misma canción descargada
-            // dos veces con nombres de archivo viejos distintos). Conserva la fila
-            // con el archivo más grande. NUNCA aplica a filas con datos reales.
-            fun sameAudio(a: Song, b: Song): Boolean {
-                val dDur = kotlin.math.abs(a.durationMs - b.durationMs)
-                val maxDur = maxOf(a.durationMs, b.durationMs, 1L)
-                if (dDur > 1_500 && dDur.toDouble() / maxDur > 0.03) return false
-                val sa = a.fileSizeBytes
-                val sb = b.fileSizeBytes
-                if (sa <= 0 || sb <= 0) return true // sin tamaño: confía en la duración
-                val dSize = kotlin.math.abs(sa - sb)
-                return dSize.toDouble() / maxOf(sa, sb) <= 0.02
-            }
-            val leftover3 = groups.values.flatten().filter { it.id !in consumed }
-            val weakByTitle = leftover3.filter { it.isPlaceholder() }
-                .groupBy { norm(it.title) }
-                .filter { it.key.isNotBlank() }
-            for ((_, wGroup) in weakByTitle) {
-                if (wGroup.size < 2) continue
-                val keep = wGroup.maxByOrNull { it.fileSizeBytes * 1000 + it.dateAdded / 1000 } ?: continue
-                for (dupe in wGroup) {
-                    if (dupe.id == keep.id || dupe.id in consumed) continue
-                    if (!sameAudio(keep, dupe)) continue
-                    mergeInto(keep, dupe)
-                    consumed.add(dupe.id)
-                }
-            }
-
-            // FASE 2d: dos filas FUERTES con el MISMO título+artista y el mismo
-            // audio (una descargada con Letra y otra Sin letra, por ejemplo).
-            // El título+artista idéntico + misma duración/tamaño es prueba
-            // suficiente de que es la misma pista; conserva la que tenga portada.
-            // NO aplica a filas con IDs de YouTube distintos (podrían ser versiones
-            // distintas de verdad).
-            val strongByKey = leftover3.filter { !it.isPlaceholder() }
-                .groupBy { norm(it.title) + "|||" + norm(it.artist) }
-                .filter { it.key.isNotBlank() && !it.key.startsWith("|||") }
-            for ((_, sGroup) in strongByKey) {
-                if (sGroup.size < 2) continue
-                val ids = sGroup.mapNotNull { it.youtubeVideoId }.distinct()
-                if (ids.size > 1) continue // distintos videos: no tocar
-                val keep = sGroup.maxByOrNull { songScore(it) * 1000 + it.fileSizeBytes / 1024 } ?: continue
-                for (dupe in sGroup) {
-                    if (dupe.id == keep.id || dupe.id in consumed) continue
-                    if (!sameAudio(keep, dupe)) continue
-                    mergeInto(keep, dupe)
-                    consumed.add(dupe.id)
-                }
-            }
-
-            // FASE 2e: débil cuyo título es la fila fuerte + sufijo basura con
-            // código ("Milagro K1V9", "Sunsetz 5-rbSNzU", "fanshop supernova
-            // mZyXw1"). El sufijo (código alfanumérico de 4-8 chars tras un
-            // espacio o guion) no forma parte del nombre real. Estrategia:
-            //   1. Para cada débil calcula su título SIN el sufijo.
-            //   2. Busca una fila fuerte cuyo título normalizado sea IGUAL o
-            //      prefijo del débil ("sunsetz" vs "sunsetz 5 rbsnzu").
-            //   3. Confirma con audio: coincide la duración real, O la débil
-            //      tiene la duración por defecto 180 s (viejos escaneos nunca
-            //      la midieron) y hay un único candidato fuerte.
-            // El sobreviviente hereda la letra (.lrc) de la débil si él no tiene.
-            val strongs = leftover3.filter { !it.isPlaceholder() && it.id !in consumed }
-            val junkSuffix = Regex("[\\s\\-_]+[A-Za-z0-9]{4,8}$")
-            val weakWithJunk = leftover3.filter { it.isPlaceholder() && it.id !in consumed }
-            for (weak in weakWithJunk) {
-                val raw = weak.title.trim()
-                val m = junkSuffix.find(raw) ?: continue
-                val baseNorm = norm(raw.replace(junkSuffix, ""))
-                if (baseNorm.length < 4) continue
-
-                // Candidatos fuertes: título igual O la débil empieza con el título fuerte
+            // FASE 3: débil cuyo título es la fila fuerte + sufijo con código
+            // ("Milagro K1V9", "Sunsetz 5-rbSNzU"), un prefijo incompleto o un
+            // typo ("perd n" vs "Perdón", ratio ≥82). Requiere audio compatible
+            // O duración 180 s (escaneos viejos nunca la midieron) con un único
+            // candidato. El sobreviviente hereda la letra de la débil.
+            val strongs = songs.filter { !it.isPlaceholder() && it.id !in consumed }
+            for (weak in songs.filter { it.isPlaceholder() && it.id !in consumed }) {
+                val weakNorm = SongMatching.norm(weak.title)
+                if (weakNorm.length < 4) continue
+                val weakKey = SongMatching.titleKey(weak.title)
                 val candidates = strongs.filter { st ->
-                    val stn = norm(st.title)
-                    stn == baseNorm || (stn.length >= 4 && raw.lowercase().startsWith(stn))
+                    if (st.id == weak.id) return@filter false
+                    val stn = SongMatching.norm(st.title)
+                    if (stn.isEmpty()) return@filter false
+                    val sameKey = SongMatching.titleKey(st.title) == weakKey
+                    val prefix = stn.startsWith(weakNorm) || weakNorm.startsWith(stn)
+                    val fuzzy = SongMatching.fuzzyRatio(st.title, weak.title) >= 82
+                    sameKey || prefix || fuzzy
                 }
                 if (candidates.isEmpty()) continue
 
                 val strongMatch = if (candidates.size == 1) {
                     candidates.first()
                 } else {
-                    candidates.filter { sameAudio(it, weak) }
+                    candidates.filter { SongMatching.sameAudio(it, weak) }
                         .maxByOrNull { songScore(it) } ?: continue
                 }
 
                 val weakDurIsDefault = weak.durationMs == 180000L
-                val durOk = sameAudio(strongMatch, weak) ||
+                val durOk = SongMatching.sameAudio(strongMatch, weak) ||
                         (weakDurIsDefault && candidates.size == 1)
                 if (!durOk) continue
 
@@ -605,8 +519,39 @@ class SamsungMusicViewModel(application: Application) : AndroidViewModel(applica
                     } catch (_: Exception) {
                     }
                 }
-                mergeInto(strongMatch, weak)
-                consumed.add(weak.id)
+                mergeAndConsume(strongMatch, weak)
+            }
+
+            // FASE 4: dos filas DÉBILES con el mismo título (sin sufijo basura)
+            // que apuntan al mismo audio (misma descarga con nombres viejos
+            // distintos). Conserva la fila con el archivo más grande. NUNCA
+            // aplica a filas con datos reales.
+            val leftover3 = songs.filter { it.id !in consumed }
+            val weakByTitle = leftover3.filter { it.isPlaceholder() }
+                .groupBy { SongMatching.titleKey(it.title) }
+                .filter { it.key.isNotBlank() }
+            for ((_, wGroup) in weakByTitle) {
+                if (wGroup.size < 2) continue
+                val keep = wGroup.maxByOrNull { it.fileSizeBytes * 1000 + it.dateAdded / 1000 } ?: continue
+                for (dupe in wGroup) {
+                    if (SongMatching.sameAudio(keep, dupe)) mergeAndConsume(keep, dupe)
+                }
+            }
+
+            // FASE 5: dos filas FUERTES con el MISMO título+artista y el mismo
+            // audio (una descargada con Letra y otra Sin letra, por ejemplo).
+            // NO aplica a filas con IDs de YouTube distintos (versiones reales).
+            val strongByKey = leftover3.filter { !it.isPlaceholder() }
+                .groupBy { SongMatching.norm(it.title) + "|||" + SongMatching.norm(it.artist) }
+                .filter { it.key.isNotBlank() && !it.key.startsWith("|||") }
+            for ((_, sGroup) in strongByKey) {
+                if (sGroup.size < 2) continue
+                val ids = sGroup.mapNotNull { it.youtubeVideoId }.filter { id11.matches(it) }.distinct()
+                if (ids.size > 1) continue // distintos videos: no tocar
+                val keep = sGroup.maxByOrNull { songScore(it) * 1000 + it.fileSizeBytes / 1024 } ?: continue
+                for (dupe in sGroup) {
+                    if (SongMatching.sameAudio(keep, dupe)) mergeAndConsume(keep, dupe)
+                }
             }
 
             var removedRows = 0
@@ -657,22 +602,7 @@ class SamsungMusicViewModel(application: Application) : AndroidViewModel(applica
      */
     private fun recoverExistingSongs() {
         viewModelScope.launch(Dispatchers.IO) {
-            try {
-                val existing = repository.allSongs.firstOrNull() ?: emptyList()
-                // PERF: evita re-probar (MediaPlayer) archivos que ya están en la BD
-                val knownSizes = existing.mapNotNull { s ->
-                    if (s.fileSizeBytes > 0) s.fileSizeBytes to s.fileSizeBytes else null
-                }.toMap()
-                val recovered = engine.scanAndRecoverExistingSongs(knownSizes)
-                val existingIds = existing.map { it.id }.toSet()
-                for (song in recovered) {
-                    if (song.id !in existingIds) {
-                        repository.insertSong(song)
-                    }
-                }
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
+            recoverExistingSongsBlocking()
         }
     }
 
@@ -689,22 +619,26 @@ class SamsungMusicViewModel(application: Application) : AndroidViewModel(applica
                 val knownSizes = existingForSizes.mapNotNull { s ->
                     if (s.fileSizeBytes > 0) s.fileSizeBytes to s.fileSizeBytes else null
                 }.toMap()
-                val recovered = engine.scanAndRecoverExistingSongs(knownSizes)
+                val recovered = engine.scanAndRecoverExistingSongs(knownSizes).toMutableList()
+                val folderUri = userFolderUri()
+                if (!folderUri.isNullOrBlank()) {
+                    recovered += engine.scanUserFolder(folderUri, knownSizes)
+                }
                 val existing = repository.allSongs.firstOrNull() ?: emptyList()
                 val existingIds = existing.map { it.id }.toSet()
                 var added = 0
                 for (song in recovered) {
-                    if (song.id !in existingIds) {
-                        repository.insertSong(song)
-                        added++
-                    }
+                    repository.insertSong(song) // REPLACE: repara filePath/lrc de la fila canónica
+                    if (song.id !in existingIds) added++
                 }
                 val (merged, orphans) = dedupeExistingSongs()
                 val migrated = migrateLegacyPlaceholders()
+                val cleanedCovers = deleteOrphanCoverFiles()
                 val after = repository.allSongs.firstOrNull()?.size ?: 0
                 buildString {
                     append("$added nuevas · $merged duplicados fusionados · $migrated metadatos corregidos")
                     if (orphans > 0) append(" · $orphans archivos huéfanos borrados")
+                    if (cleanedCovers > 0) append(" · $cleanedCovers portadas huérfanas limpiadas")
                     if (added == 0 && merged == 0 && migrated == 0 && after == before) {
                         append(" · biblioteca al día")
                     }
@@ -717,11 +651,6 @@ class SamsungMusicViewModel(application: Application) : AndroidViewModel(applica
         }
     }
 
-    /**
-     * Migra filas viejas que aún muestran artista/álbum "Samsung Music" o
-     * "Descargas" hacia valores neutros; los datos reales los traerá el
-     * enriquecimiento con MusicBrainz.
-     */
     private suspend fun migrateLegacyPlaceholders(): Int {
         val songs = repository.allSongs.firstOrNull() ?: return 0
         var migrated = 0
@@ -743,6 +672,33 @@ class SamsungMusicViewModel(application: Application) : AndroidViewModel(applica
             migrated++
         }
         return migrated
+    }
+
+    /**
+     * Respuesta a "¿qué pasa con las portadas anteriores cuando cambio la de
+     * una canción? siguen guardadas en algún lado": purga los archivos
+     * covers/cover_*.jpg que ya no apunta NINGUNA fila de la biblioteca.
+     * Devuelve cuántos borró (para el resumen del reescaneo).
+     */
+    private suspend fun deleteOrphanCoverFiles(): Int {
+        var deleted = 0
+        try {
+            val coversDir = File(getApplication<Application>().filesDir, "covers")
+            if (!coversDir.exists()) return 0
+            val live = repository.allSongs.firstOrNull() ?: return 0
+            val usedPaths = live.mapNotNull { s -> s.coverArtUrl }.toHashSet()
+            for (f in coversDir.listFiles() ?: emptyArray()) {
+                if (!f.isFile || !f.name.startsWith("cover_")) continue
+                if (f.absolutePath !in usedPaths) {
+                    if (f.delete()) deleted++
+                }
+            }
+            if (deleted > 0) {
+                android.util.Log.i("SamsungMusic", "Portadas huérfanas borradas: $deleted")
+            }
+        } catch (_: Exception) {
+        }
+        return deleted
     }
 
     /**
@@ -784,36 +740,35 @@ class SamsungMusicViewModel(application: Application) : AndroidViewModel(applica
     /**
      * Al arrancar, completa los metadatos de las canciones existentes usando
      * MusicBrainz (solo las que aún no tienen una puntuación de enriquecimiento alta).
+     * Corre AL FINAL del arranque secuencial (recuperar → dedupe → migrar →
+     * portadas), ya con la biblioteca estable.
      */
-    @Volatile private var autoEnrichRunning = false
+    private val autoEnrichRunning = java.util.concurrent.atomic.AtomicBoolean(false)
 
-    private fun autoEnrichExistingSongs() {
-        viewModelScope.launch(Dispatchers.IO) {
-            if (autoEnrichRunning) return@launch
-            autoEnrichRunning = true
-            try {
-                // Espera (hasta ~60 s) a que la biblioteca se cargue por primera vez.
-                var songs = rawSongs.value
-                var waitedMs = 0
-                while (songs.isEmpty() && waitedMs < 60_000) {
-                    delay(1_000)
-                    waitedMs += 1_000
-                    songs = rawSongs.value
-                }
-                if (songs.isEmpty()) return@launch
+    private suspend fun autoEnrichInternal() {
+        try {
+            // Espera (hasta ~60 s) a que la biblioteca se cargue por primera vez.
+            var songs = rawSongs.value
+            var waitedMs = 0
+            while (songs.isEmpty() && waitedMs < 60_000) {
+                delay(1_000)
+                waitedMs += 1_000
+                songs = rawSongs.value
+            }
+            if (songs.isEmpty()) return
 
-                val pending = songs.filter {
-                    it.enrichmentScore < 85 ||
-                            it.album.equals("YouTube Downloads", ignoreCase = true) ||
-                            it.album.equals("Descargas", ignoreCase = true) ||
-                            it.artist.equals("Artista desconocido", ignoreCase = true) ||
-                            it.artist.equals("Samsung Music", ignoreCase = true)
-                }
-                if (pending.isEmpty()) return@launch
+            val pending = songs.filter {
+                it.enrichmentScore < 85 ||
+                        it.album.equals("YouTube Downloads", ignoreCase = true) ||
+                        it.album.equals("Descargas", ignoreCase = true) ||
+                        it.artist.equals("Artista desconocido", ignoreCase = true) ||
+                        it.artist.equals("Samsung Music", ignoreCase = true)
+            }
+            if (pending.isEmpty()) return
 
-                val total = pending.size
-                pending.forEachIndexed { index, song ->
-                    _enrichProgress.value = Pair(index + 1, total)
+            val total = pending.size
+            pending.forEachIndexed { index, song ->
+                _enrichProgress.value = Pair(index + 1, total)
                     val result = engine.buscarMusicBrainz(song.artist, song.title)
                         // Para canciones de YouTube sin enriquecer, el artista puede ser
                         // un placeholder: reintenta solo con el título.
@@ -862,13 +817,12 @@ class SamsungMusicViewModel(application: Application) : AndroidViewModel(applica
                             releaseId = null
                         )
                     }
-                    // Cortesía con la API pública de MusicBrainz (~1 req/seg).
-                    delay(1_100)
-                }
-                _enrichProgress.value = null
-            } finally {
-                autoEnrichRunning = false
+                // Cortesía con la API pública de MusicBrainz (~1 req/seg).
+                delay(1_100)
             }
+            _enrichProgress.value = null
+        } finally {
+            autoEnrichRunning.set(false)
         }
     }
 
