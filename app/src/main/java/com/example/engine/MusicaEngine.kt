@@ -801,7 +801,7 @@ class MusicaEngine(private val context: Context) {
                 } catch (e: Exception) {
                     onProgress(
                         DownloadProgress(
-                            step = "Sin audio disponible: ${item.title}",
+                            step = "Fallo (${index + 1}/$total): ${item.title} — ${e.message ?: "sin detalle"}",
                             percent = currentPercent,
                             currentSongTitle = item.title,
                             totalItems = total,
