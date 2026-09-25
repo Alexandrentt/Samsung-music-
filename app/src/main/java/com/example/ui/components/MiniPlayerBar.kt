@@ -15,7 +15,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.SkipNext
@@ -31,6 +30,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
@@ -67,6 +67,12 @@ fun MiniPlayerBar(
         0f
     }
 
+    // "1:23" / "3:45" para el subtítulo mientras suena música
+    fun fmtTime(ms: Long): String {
+        val totalSec = (ms / 1000).coerceAtLeast(0)
+        return "%d:%02d".format(totalSec / 60, totalSec % 60)
+    }
+
     Box(
         modifier = Modifier
             .fillMaxWidth()
@@ -88,15 +94,17 @@ fun MiniPlayerBar(
             shadowElevation = 8.dp
         ) {
             Column(modifier = Modifier.fillMaxWidth()) {
-                // Barra de progreso sutil en la parte superior
+                // Barra de progreso en la parte superior
                 if (currentSong != null) {
                     LinearProgressIndicator(
                         progress = { progress },
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(2.5.dp),
+                            .height(3.dp),
                         color = MaterialTheme.colorScheme.primary,
-                        trackColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f)
+                        trackColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.10f),
+                        strokeCap = StrokeCap.Round,
+                        gapSize = 0.dp
                     )
                 }
 
@@ -106,11 +114,11 @@ fun MiniPlayerBar(
                         .padding(horizontal = 10.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // Carátula de la canción con affordance para expandir
+                    // Carátula de la canción (limpia, sin badge superpuesto)
                     Box(
                         modifier = Modifier
-                            .size(48.dp)
-                            .clip(RoundedCornerShape(10.dp))
+                            .size(50.dp)
+                            .clip(RoundedCornerShape(12.dp))
                             .background(MaterialTheme.colorScheme.surface),
                         contentAlignment = Alignment.Center
                     ) {
@@ -119,8 +127,8 @@ fun MiniPlayerBar(
                                 model = displaySong.coverArtUrl,
                                 contentDescription = displaySong.title,
                                 modifier = Modifier
-                                    .size(48.dp)
-                                    .clip(RoundedCornerShape(10.dp)),
+                                    .size(50.dp)
+                                    .clip(RoundedCornerShape(12.dp)),
                                 contentScale = ContentScale.Crop
                             )
                         } else {
@@ -129,25 +137,6 @@ fun MiniPlayerBar(
                                 contentDescription = null,
                                 tint = MaterialTheme.colorScheme.primary,
                                 modifier = Modifier.size(24.dp)
-                            )
-                        }
-
-                        // Icono sutil de expandir
-                        Box(
-                            modifier = Modifier
-                                .align(Alignment.TopEnd)
-                                .size(14.dp)
-                                .background(
-                                    color = Color.Black.copy(alpha = 0.4f),
-                                    shape = RoundedCornerShape(bottomStart = 6.dp, topEnd = 10.dp)
-                                ),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.KeyboardArrowUp,
-                                contentDescription = "Expandir reproductor",
-                                tint = Color.White,
-                                modifier = Modifier.size(10.dp)
                             )
                         }
                     }
@@ -169,10 +158,11 @@ fun MiniPlayerBar(
                             color = MaterialTheme.colorScheme.onSurface
                         )
                         Text(
-                            text = if (displaySong != null) {
-                                if (currentSong != null) displaySong.artist else "${displaySong.artist} • Toca para escuchar"
-                            } else {
-                                "Selecciona una canción para escuchar"
+                            text = when {
+                                displaySong == null -> "Selecciona una canción para escuchar"
+                                currentSong == null -> "${displaySong.artist} • Toca para escuchar"
+                                durationMs > 0 -> "${displaySong.artist} • ${fmtTime(currentPositionMs)} / ${fmtTime(durationMs)}"
+                                else -> displaySong.artist
                             },
                             fontSize = 12.sp,
                             maxLines = 1,

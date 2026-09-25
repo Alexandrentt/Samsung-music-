@@ -230,7 +230,7 @@ class MusicPlaybackService : Service() {
             val request = ImageRequest.Builder(this@MusicPlaybackService)
                 .data(url)
                 .allowHardware(false) // RemoteViews requires software Bitmap
-                .size(600, 360)
+                .size(600, 600) // portada cuadrada para la notificación
                 .build()
             val result = imageLoader.execute(request)
             (result.drawable as? BitmapDrawable)?.bitmap
@@ -308,9 +308,9 @@ class MusicPlaybackService : Service() {
             setProgressBar(R.id.notif_progress_bar, maxProgress, currentProgress, false)
 
             if (artBitmap != null) {
-                setImageViewBitmap(R.id.notif_bg_art, artBitmap)
+                setImageViewBitmap(R.id.notif_cover, artBitmap)
             } else {
-                setImageViewResource(R.id.notif_bg_art, R.drawable.bg_notif_gradient)
+                setImageViewResource(R.id.notif_cover, R.drawable.bg_notif_gradient)
             }
 
             setOnClickPendingIntent(R.id.notif_btn_play_pause, togglePendingIntent)
@@ -330,9 +330,9 @@ class MusicPlaybackService : Service() {
             setProgressBar(R.id.notif_progress_bar, maxProgress, currentProgress, false)
 
             if (artBitmap != null) {
-                setImageViewBitmap(R.id.notif_bg_art, artBitmap)
+                setImageViewBitmap(R.id.notif_cover, artBitmap)
             } else {
-                setImageViewResource(R.id.notif_bg_art, R.drawable.bg_notif_gradient)
+                setImageViewResource(R.id.notif_cover, R.drawable.bg_notif_gradient)
             }
 
             setOnClickPendingIntent(R.id.notif_btn_play_pause, togglePendingIntent)
