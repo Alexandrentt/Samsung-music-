@@ -37,7 +37,7 @@
                 android:id="@+id/notif_badge_icon"
                 android:layout_width="26dp"
                 android:layout_height="26dp"
-                android:contentDescription="Samsung Music"
+                android:contentDescription="Música"
                 android:src="@drawable/ic_notif_play_ring" />
 
             <View
@@ -106,7 +106,7 @@
                     android:layout_height="wrap_content"
                     android:ellipsize="end"
                     android:maxLines="1"
-                    android:text="Samsung Music"
+                    android:text="Música"
                     android:textColor="#FFFFFF"
                     android:textSize="18sp"
                     android:textStyle="bold" />

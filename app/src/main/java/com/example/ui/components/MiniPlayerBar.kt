@@ -161,7 +161,7 @@ fun MiniPlayerBar(
                             .padding(end = 4.dp)
                     ) {
                         Text(
-                            text = displaySong?.title ?: "Samsung Music",
+                            text = displaySong?.title ?: "Música",
                             fontWeight = FontWeight.SemiBold,
                             fontSize = 14.sp,
                             maxLines = 1,

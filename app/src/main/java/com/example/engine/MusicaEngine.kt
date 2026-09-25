@@ -103,7 +103,7 @@ class MusicaEngine(private val context: Context) {
                     Song(
                         id = id,
                         title = baseTitle.ifBlank { "Canción descargada" },
-                        artist = "Samsung Music",
+                        artist = "Artista desconocido",
                         album = "Descargas",
                         durationMs = if (probedMs > 0) probedMs else 180000L,
                         filePath = audioFile.absolutePath,
@@ -119,7 +119,7 @@ class MusicaEngine(private val context: Context) {
                         isDownloaded = true,
                         bitrate = "320 kbps",
                         youtubeVideoId = if (cleanId.length == 11) cleanId else null,
-                        youtubeChannel = "Samsung Music"
+                        youtubeChannel = "YouTube"
                     )
                 )
             }
@@ -280,7 +280,7 @@ class MusicaEngine(private val context: Context) {
                     return@withContext EnrichmentResult(
                         title = bestTitle,
                         artist = if (bestArtist.isNotBlank()) bestArtist else artista,
-                        album = if (bestAlbum.isNotBlank()) bestAlbum else "Samsung Music",
+                        album = if (bestAlbum.isNotBlank()) bestAlbum else "Descargas",
                         coverArtUrl = coverUrl,
                         score = bestScore,
                         releaseId = releaseId,

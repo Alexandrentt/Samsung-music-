@@ -749,7 +749,7 @@ class SamsungMusicViewModel(application: Application) : AndroidViewModel(applica
 
                 val intent = Intent(Intent.ACTION_SEND).apply {
                     type = "text/csv"
-                    putExtra(Intent.EXTRA_SUBJECT, "Historial de Descargas Samsung Music")
+                    putExtra(Intent.EXTRA_SUBJECT, "Historial de Descargas Música")
                     putExtra(Intent.EXTRA_STREAM, uri)
                     addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 }
