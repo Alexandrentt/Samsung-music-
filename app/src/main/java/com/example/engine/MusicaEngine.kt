@@ -96,33 +96,31 @@ class MusicaEngine(private val context: Context) {
 
             for (audioFile in audioFiles) {
                 if (!seenPaths.add(audioFile.absolutePath)) continue
-                val rawName = audioFile.nameWithoutExtension
-                val cleanId = rawName.substringAfterLast('_').take(11)
-                val baseTitle = rawName.substringBeforeLast('_').replace('_', ' ').trim()
-                // ID canónico de 11 caracteres. Si el sufijo tras el último "_"
-                // no tiene 11, es un archivo viejo con ID de 6 → derivar el ID
-                // completo no es posible aquí, así que se marca como local para
-                // que el dedupe lo fusione por título con su equivalente completo.
-                val id = if (cleanId.length == 11) "yt_$cleanId" else "local_${audioFile.name.hashCode()}"
+                val (videoId, cleanTitle) = parseMediaFileName(audioFile.nameWithoutExtension)
+                val cleanId = videoId
+                // ID canónico cuando es posible. Con ID, la fila del escaneo
+                // nace con la MISMA clave que la fila de la descarga original
+                // → REPLACE, no duplicado. Si no hay ID derivable, local.
+                val id = if (cleanId != null) "yt_$cleanId" else "local_${audioFile.absolutePath.hashCode()}"
 
                 // PERF: MediaPlayer.prepare() por archivo tarda ~100-500 ms y
                 // se disparaba en cada arranque/menú para TODOS los archivos.
                 // Si ya conocemos el tamaño (BD), se omite el probe.
                 val probedMs = if (knownFileSizes[audioFile.length()] != null) -1L else
                     YouTubeAudioDownloader.probeDurationMs(audioFile.absolutePath)
-                val lrcFile = File(audioFile.parentFile, "${rawName}.lrc")
+                val lrcFile = File(audioFile.parentFile, "${audioFile.nameWithoutExtension}.lrc")
                 val lrcPath = if (lrcFile.exists() && lrcFile.length() > 0) lrcFile.absolutePath else null
 
                 recovered.add(
                     Song(
                         id = id,
-                        title = baseTitle.ifBlank { "Canción descargada" },
+                        title = cleanTitle.ifBlank { "Canción descargada" },
                         artist = "Artista desconocido",
                         album = "Descargas",
                         durationMs = if (probedMs > 0) probedMs else 180000L,
                         filePath = audioFile.absolutePath,
                         fileSizeBytes = audioFile.length(),
-                        coverArtUrl = if (cleanId.length == 11) "https://img.youtube.com/vi/$cleanId/hqdefault.jpg" else null,
+                        coverArtUrl = cleanId?.let { "https://img.youtube.com/vi/$it/hqdefault.jpg" },
                         isFavorite = false,
                         playCount = 0,
                         dateAdded = audioFile.lastModified(),
@@ -132,7 +130,7 @@ class MusicaEngine(private val context: Context) {
                         lrcFilePath = lrcPath,
                         isDownloaded = true,
                         bitrate = "320 kbps",
-                        youtubeVideoId = if (cleanId.length == 11) cleanId else null,
+                        youtubeVideoId = cleanId,
                         youtubeChannel = "YouTube"
                     )
                 )
@@ -144,6 +142,44 @@ class MusicaEngine(private val context: Context) {
     data class PlaylistItem(val videoId: String, val title: String, val channel: String)
 
     companion object {
+        /**
+         * Interpreta el nombre de un archivo de audio encontrado en disco.
+         *
+         * Formato canónico escrito por la app: "<Título con guiones bajos>_<videoId>.m4a"
+         * Pero versiones viejas escribieron variantes:
+         *  - "Título 5-rbSNzU.m4a"        → sufijo basura con código (de IDs trunca­dos)
+         *  - "Título_5rbSNz.m4a"          → ID recortado a 6 chars
+         *  - "Diego_Verdaguer_Corazon_de_Papel_rY0WqhfEA2w.m4a" → guiones perdidos
+         *
+         * Devuelve (videoId real de 11 chars o null, título limpio SIN el código).
+         * LIMPIAR el sufijo AQUÍ es la raíz del fix de duplicados: la fila que
+         * nace del escaneo comparte la clave con la fila canónica yt_<id> en
+         * lugar de aparecer como "Sunsetz 5-rbSNzU" junto a "Sunsetz".
+         */
+        fun parseMediaFileName(rawName: String): Pair<String?, String> {
+            val noExt = rawName.substringBeforeLast('.')
+            // 1) ¿Termina en un ID de YouTube canónico (_xxxxxxxxxxx o pegado)?
+            val idMatch = Regex("[ _-]([A-Za-z0-9_-]{11})$").find(noExt)
+            if (idMatch != null) {
+                val maybeId = idMatch.groupValues[1]
+                val looksLikeId = maybeId.any { it.isDigit() } && maybeId.any { it.isLetter() }
+                if (looksLikeId) {
+                    val title = noExt.substring(0, idMatch.range.first)
+                        .replace('_', ' ').replace(Regex("\\s+"), " ").trim()
+                    return Pair(maybeId, title)
+                }
+            }
+            // 2) ID truncado tras guion bajo ("_5rbSNz")
+            val shortMatch = Regex("_([A-Za-z0-9]{4,10})$").find(noExt)
+            if (shortMatch != null && com.example.data.SongMatching.looksLikeHash(shortMatch.groupValues[1])) {
+                val title = noExt.substring(0, shortMatch.range.first).replace('_', ' ').trim()
+                return Pair(null, title)
+            }
+            // 3) Sin ID: título con guiones bajos y sufijo basura opcional
+            val base = noExt.replace('_', ' ')
+            return Pair(null, com.example.data.SongMatching.stripJunkSuffix(base).trim())
+        }
+
         const val PLAYLIST_ID_DEFAULT = "PLCUqyibcwbIAI0E8rbFcKhKMuUP0dfcIj"
         const val PLAYLIST_URL_DEFAULT = "https://youtube.com/playlist?list=PLCUqyibcwbIAI0E8rbFcKhKMuUP0dfcIj&si=CFlp1A7Y_8g4mKEG"
         const val CAA_API = "https://coverartarchive.org"
@@ -943,32 +979,31 @@ class MusicaEngine(private val context: Context) {
                     val isAudio = name.endsWith(".m4a") || name.endsWith(".mp3") || name.endsWith(".wav")
                     if (!isAudio || child.length() <= 10_000L) continue
 
-                    val rawName = name.substringBeforeLast('.')
-                    val cleanId = rawName.substringAfterLast('_').take(11)
-                    val baseTitle = rawName.substringBeforeLast('_').replace('_', ' ').trim()
-                    val id = if (cleanId.length == 11) "yt_$cleanId" else "local_${name.hashCode()}"
+                    val (videoId, cleanTitle) = parseMediaFileName(name.substringBeforeLast('.'))
+                    val cleanId = videoId
+                    val id = if (cleanId != null) "yt_$cleanId" else "local_${child.uri.hashCode()}"
 
                     val probedMs = if (knownFileSizes[child.length()] != null) -1L else
                         YouTubeAudioDownloader.probeDurationMs(child.uri.toString())
-                    val lrcDoc = dir.findFile("$rawName.lrc")
+                    val lrcDoc = dir.findFile("${name.substringBeforeLast('.')}.lrc")
                     val lrcPath = if (lrcDoc != null && lrcDoc.length() > 0) lrcDoc.uri.toString() else null
 
                     recovered.add(
                         Song(
                             id = id,
-                            title = baseTitle.ifBlank { "Canción descargada" },
+                            title = cleanTitle.ifBlank { "Canción descargada" },
                             artist = "Artista desconocido",
                             album = "Descargas",
                             durationMs = if (probedMs > 0) probedMs else 180000L,
                             filePath = child.uri.toString(),
                             fileSizeBytes = child.length(),
-                            coverArtUrl = if (cleanId.length == 11) "https://img.youtube.com/vi/$cleanId/hqdefault.jpg" else null,
+                            coverArtUrl = cleanId?.let { "https://img.youtube.com/vi/$it/hqdefault.jpg" },
                             dateAdded = child.lastModified(),
                             enrichmentScore = 80,
                             lrcFilePath = lrcPath,
                             isDownloaded = true,
                             bitrate = "320 kbps",
-                            youtubeVideoId = if (cleanId.length == 11) cleanId else null,
+                            youtubeVideoId = cleanId,
                             youtubeChannel = "YouTube"
                         )
                     )
