@@ -79,6 +79,34 @@ class MusicDownloadService : Service() {
         return START_NOT_STICKY
     }
 
+    private fun handleProgress(progress: DownloadProgress) {
+        _downloadProgress.value = progress
+        val now = System.currentTimeMillis()
+        // Actualiza la notificación con throttle para evitar saturar el sistema
+        if (now - lastNotificationTime > 400 || progress.percent >= 0.99f) {
+            lastNotificationTime = now
+            val percentInt = (progress.percent * 100).toInt().coerceIn(0, 100)
+            // El texto se compone con interpolación y String.format separados:
+            // un "%" literal dentro de una plantilla .format() lanza
+            // UnknownFormatConversionException (Conversion = '•') y mataba
+            // TODAS las descargas en su primer evento de progreso.
+            val text = if (progress.bytesTotal > 0) {
+                val curMb = progress.bytesDownloaded / (1024f * 1024f)
+                val totMb = progress.bytesTotal / (1024f * 1024f)
+                "$percentInt% • " +
+                        String.format(java.util.Locale.US, "%.1f", curMb) + " / " +
+                        String.format(java.util.Locale.US, "%.1f", totMb) + " MB"
+            } else {
+                "$percentInt% • " + progress.step
+            }
+            updateProgressNotification(
+                title = progress.currentSongTitle.ifBlank { "Descargando audio…" },
+                percent = percentInt,
+                content = text
+            )
+        }
+    }
+
     private suspend fun executeDownload(url: String, autoEnrich: Boolean) {
         val db = AppDatabase.getDatabase(applicationContext)
         val repository = MusicRepository(db.songDao(), db.downloadHistoryDao(), db.playlistDao())
@@ -112,24 +140,13 @@ class MusicDownloadService : Service() {
                     repository.addSongToPlaylist(targetPlaylistId, song.id)
                 },
                 onProgress = { progress ->
-                    _downloadProgress.value = progress
-                    val now = System.currentTimeMillis()
-                    // Actualiza la notificación con throttle para evitar saturar el sistema
-                    if (now - lastNotificationTime > 400 || progress.percent >= 0.99f) {
-                        lastNotificationTime = now
-                        val percentInt = (progress.percent * 100).toInt().coerceIn(0, 100)
-                        val text = if (progress.bytesTotal > 0) {
-                            val curMb = progress.bytesDownloaded / (1024f * 1024f)
-                            val totMb = progress.bytesTotal / (1024f * 1024f)
-                            "$percentInt% • %.1f / %.1f MB".format(curMb, totMb)
-                        } else {
-                            "$percentInt% • ${progress.step}"
-                        }
-                        updateProgressNotification(
-                            title = progress.currentSongTitle.ifBlank { "Descargando audio…" },
-                            percent = percentInt,
-                            content = text
-                        )
+                    try {
+                        handleProgress(progress)
+                    } catch (e: Exception) {
+                        // Un error de presentación (p. ej. formateo de texto) NO
+                        // debe abortar la descarga: la registramos y seguimos.
+                        android.util.Log.e("MusicDownloadService", "Error en callback de progreso", e)
+                        _downloadProgress.value = progress
                     }
                 }
             )
