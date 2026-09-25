@@ -375,8 +375,10 @@ class SamsungMusicViewModel(application: Application) : AndroidViewModel(applica
             // grupo aproximará cruzado débil/fuerte; nunca borra filas con datos reales.
             val fuzzyKeys = mutableMapOf<String, String>()
             fun fuzzyKey(normTitle: String): String {
-                if (normTitle.length < 4) return "t_" + normTitle
-                fuzzyKeys.entries.firstOrNull { (k, _) -> fuzzyRatio(normTitle, k) >= 85 }
+                // Umbral 80: "perdn"/"perdon" dan 83. Longitud mínima 5 evita
+                // colisiones triviales de palabras cortas.
+                if (normTitle.length < 5) return "t_" + normTitle
+                fuzzyKeys.entries.firstOrNull { (k, _) -> fuzzyRatio(normTitle, k) >= 80 }
                     ?.let { return it.value }
                 fuzzyKeys[normTitle] = "t_" + normTitle
                 return "t_" + normTitle
