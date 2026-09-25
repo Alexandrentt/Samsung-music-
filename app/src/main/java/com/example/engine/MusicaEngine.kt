@@ -85,7 +85,11 @@ class MusicaEngine(private val context: Context) {
         for (folder in foldersToScan.distinctBy { it.absolutePath }) {
             if (!folder.exists() || !folder.isDirectory) continue
             val audioFiles = folder.listFiles { file ->
-                file.isFile && (file.name.endsWith(".m4a") || file.name.endsWith(".mp3") || file.name.endsWith(".wav")) && file.length() > 10_000L
+                // Ignora descargas parciales (.part/.gen.part): no son canciones
+                file.isFile &&
+                        (file.name.endsWith(".m4a") || file.name.endsWith(".mp3") || file.name.endsWith(".wav")) &&
+                        !file.name.endsWith(".part") &&
+                        file.length() > 10_000L
             } ?: emptyArray()
 
             for (audioFile in audioFiles) {
@@ -93,7 +97,11 @@ class MusicaEngine(private val context: Context) {
                 val rawName = audioFile.nameWithoutExtension
                 val cleanId = rawName.substringAfterLast('_').take(11)
                 val baseTitle = rawName.substringBeforeLast('_').replace('_', ' ').trim()
-                val id = if (cleanId.isNotBlank() && cleanId.length >= 6) "yt_$cleanId" else "local_${audioFile.name.hashCode()}"
+                // ID canónico de 11 caracteres. Si el sufijo tras el último "_"
+                // no tiene 11, es un archivo viejo con ID de 6 → derivar el ID
+                // completo no es posible aquí, así que se marca como local para
+                // que el dedupe lo fusione por título con su equivalente completo.
+                val id = if (cleanId.length == 11) "yt_$cleanId" else "local_${audioFile.name.hashCode()}"
 
                 val probedMs = YouTubeAudioDownloader.probeDurationMs(audioFile.absolutePath)
                 val lrcFile = File(audioFile.parentFile, "${rawName}.lrc")
@@ -680,7 +688,12 @@ class MusicaEngine(private val context: Context) {
         }
 
         val safeTitle = meta.title.replace(Regex("[^a-zA-Z0-9_ -]"), "_").take(40).trim()
-        val targetFile = File(musicFolder, "${safeTitle}_${cleanId.take(6)}.m4a")
+        // ID CANÓNICO: SIEMPRE los 11 caracteres completos del video, tanto en
+        // el nombre del archivo como en la BD. Antes se usaban solo 6
+        // ("${cleanId.take(6)}"), y al recuperar/reinstalar se creaban filas
+        // yt_ABC123 junto a las yt_ABC123XYZ → la misma canción aparecía dos
+        // veces (una "Artista desconocido" sin portada).
+        val targetFile = File(musicFolder, "${safeTitle}_${cleanId}.m4a")
 
         val bytes: Long
         if (!targetFile.exists() || targetFile.length() < 10_000L) {
@@ -706,7 +719,7 @@ class MusicaEngine(private val context: Context) {
         val durationMs = if (probedMs > 0) probedMs else 0L
 
         // Letra real (sincronizada) desde LRCLIB usando la duración verdadera
-        val lrcFile = File(musicFolder, "${safeTitle}_${cleanId.take(6)}.lrc")
+        val lrcFile = File(musicFolder, "${safeTitle}_${cleanId}.lrc")
         if (!lrcFile.exists()) {
             val lrc = LrcParser.fetchLrcFromApi(meta.title, meta.artist, durationMs / 1000)
             if (lrc.isNullOrBlank()) {

@@ -276,8 +276,103 @@ class SamsungMusicViewModel(application: Application) : AndroidViewModel(applica
             seedInitialMusic()
         }
         recoverExistingSongs()
+        viewModelScope.launch(Dispatchers.IO) { dedupeExistingSongs() }
         autoEnrichExistingSongs()
         observePlaylistForWidget()
+    }
+
+    /**
+     * Fusión de duplicados (migración automática al arrancar).
+     *
+     * Agrupa canciones que apuntan al MISMO audio por, en orden:
+     *  1. youtubeVideoId (ID canónico de 11 caracteres)
+     *  2. filePath (mismo archivo físico)
+     *  3. título normalizado (sin acentos/mayúsculas) — captura las filas
+     *     viejas con ID de 6 caracteres ("perd n" vs "perdón")
+     *
+     * Conserva la fila con mejor metadato (portada + mayor score) como
+     * sobreviviente, transfiere favoritos/playcount y las referencias de
+     * playlists de las demás, borra las filas duplicadas y elimina archivos
+     * huéfanos que ya no apunta ninguna fila.
+     */
+    private suspend fun dedupeExistingSongs() {
+        try {
+            val songs = repository.allSongs.firstOrNull() ?: return
+            if (songs.size < 2) return
+
+            fun norm(s: String): String = java.text.Normalizer.normalize(s, java.text.Normalizer.Form.NFD)
+                .replace(Regex("\\p{InCombiningDiacriticalMarks}+"), "")
+                .lowercase().replace(Regex("[^a-z0-9]"), "").trim()
+
+            fun songScore(s: Song): Int =
+                (if (!s.coverArtUrl.isNullOrBlank()) 100 else 0) + s.enrichmentScore
+
+            val groups = mutableMapOf<String, MutableList<Song>>()
+            for (s in songs) {
+                val key = when {
+                    !s.youtubeVideoId.isNullOrBlank() && Regex("[a-zA-Z0-9_-]{11}").matches(s.youtubeVideoId!!) ->
+                        "v_" + s.youtubeVideoId!!
+                    s.filePath.isNotBlank() ->
+                        "f_" + s.filePath
+                    else ->
+                        "t_" + norm(s.title).ifBlank { "x_" + s.id }
+                }
+                groups.getOrPut(key) { mutableListOf() }.add(s)
+            }
+
+            var removedRows = 0
+            var removedFiles = 0
+            for ((_, group) in groups) {
+                if (group.size < 2) continue
+                val survivor = group.maxByOrNull { songScore(it) } ?: continue
+                for (dupe in group) {
+                    if (dupe.id == survivor.id) continue
+                    // Transfiere favoritos y conteo de reproducciones
+                    if (dupe.isFavorite && !survivor.isFavorite) {
+                        repository.setFavorite(survivor.id, true)
+                    }
+                    if (dupe.playCount > 0) {
+                        repeat(dupe.playCount) {
+                            repository.incrementPlayCount(survivor.id)
+                        }
+                    }
+                    // Transfiere referencias de playlists
+                    val playlistsWith = playlistsWithSongs.value
+                    for (pw in playlistsWith) {
+                        if (pw.songs.any { it.id == dupe.id } &&
+                            !pw.songs.any { it.id == survivor.id }) {
+                            repository.addSongToPlaylist(pw.playlist.id, survivor.id)
+                        }
+                    }
+                    repository.deleteSong(dupe)
+                    removedRows++
+                }
+            }
+
+            // Archivos huéfanos: apuntados por 0 filas → borrarlos del disco
+            val remaining = repository.allSongs.firstOrNull() ?: emptyList()
+            val livePaths = remaining.map { File(it.filePath).canonicalPath }.toSet()
+            val orphanFiles = mutableSetOf<String>()
+            for (s in songs) {
+                val p = File(s.filePath).canonicalPath
+                if (p !in livePaths && !orphanFiles.contains(p)) {
+                    // solo si ningún sobreviviente lo usa
+                    orphanFiles.add(p)
+                }
+            }
+            for (path in orphanFiles) {
+                val f = File(path)
+                if (f.exists() && f.isFile && (f.name.endsWith(".m4a") || f.name.endsWith(".mp3"))) {
+                    if (f.delete()) removedFiles++
+                }
+            }
+
+            if (removedRows > 0 || removedFiles > 0) {
+                android.util.Log.i("SamsungMusic", "Dedupe: $removedRows filas duplicadas, $removedFiles archivos huéfanos eliminados")
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("SamsungMusic", "Error en dedupe de canciones", e)
+        }
     }
 
     /**
