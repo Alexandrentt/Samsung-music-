@@ -278,8 +278,7 @@ class SamsungMusicViewModel(application: Application) : AndroidViewModel(applica
         recoverExistingSongs()
         viewModelScope.launch(Dispatchers.IO) { dedupeExistingSongs() }
         autoEnrichExistingSongs()
-        observePlaylistForWidget()
-    }
+        observePlaylistForWidget()    }
 
     /**
      * Fusión de duplicados (migración automática al arrancar).
@@ -295,10 +294,10 @@ class SamsungMusicViewModel(application: Application) : AndroidViewModel(applica
      * playlists de las demás, borra las filas duplicadas y elimina archivos
      * huéfanos que ya no apunta ninguna fila.
      */
-    private suspend fun dedupeExistingSongs() {
-        try {
-            val songs = repository.allSongs.firstOrNull() ?: return
-            if (songs.size < 2) return
+    private suspend fun dedupeExistingSongs(): Pair<Int, Int> {
+        return try {
+            val songs = repository.allSongs.firstOrNull() ?: return Pair(0, 0)
+            if (songs.size < 2) return Pair(0, 0)
 
             fun norm(s: String): String = java.text.Normalizer.normalize(s, java.text.Normalizer.Form.NFD)
                 .replace(Regex("\\p{InCombiningDiacriticalMarks}+"), "")
@@ -307,10 +306,11 @@ class SamsungMusicViewModel(application: Application) : AndroidViewModel(applica
             fun songScore(s: Song): Int =
                 (if (!s.coverArtUrl.isNullOrBlank()) 100 else 0) + s.enrichmentScore
 
+            val id11 = Regex("[a-zA-Z0-9_-]{11}")
             val groups = mutableMapOf<String, MutableList<Song>>()
             for (s in songs) {
                 val key = when {
-                    !s.youtubeVideoId.isNullOrBlank() && Regex("[a-zA-Z0-9_-]{11}").matches(s.youtubeVideoId!!) ->
+                    !s.youtubeVideoId.isNullOrBlank() && id11.matches(s.youtubeVideoId!!) ->
                         "v_" + s.youtubeVideoId!!
                     s.filePath.isNotBlank() ->
                         "f_" + s.filePath
@@ -318,6 +318,37 @@ class SamsungMusicViewModel(application: Application) : AndroidViewModel(applica
                         "t_" + norm(s.title).ifBlank { "x_" + s.id }
                 }
                 groups.getOrPut(key) { mutableListOf() }.add(s)
+            }
+            val consumed = mutableSetOf<String>()
+
+            // FASE 2: mezcla por título normalizado cuando una fila no tiene ID
+            // de 11 caracteres (filas viejas de 6 chars) o su artista/álbum son
+            // placeholders ("Artista desconocido" / "Samsung Music"), aunque el
+            // videoId difiera. NUNCA mezcla dos filas con IDs de 11 distintos.
+            val leftover = groups.values.flatten().filter { it.id !in consumed }
+            val byTitle = leftover.groupBy { "t_" + norm(it.title).ifBlank { "x_" + it.id } }
+            for ((_, tGroup) in byTitle) {
+                if (tGroup.size < 2) continue
+                val hasGoodId = tGroup.any { s ->
+                    !s.youtubeVideoId.isNullOrBlank() && id11.matches(s.youtubeVideoId!!)
+                }
+                val hasPlaceholder = tGroup.any { s ->
+                    s.youtubeVideoId.isNullOrBlank() || !id11.matches(s.youtubeVideoId!!) ||
+                            s.artist.equals("Artista desconocido", ignoreCase = true) ||
+                            s.artist.equals("Samsung Music", ignoreCase = true) ||
+                            s.album.equals("Descargas", ignoreCase = true) ||
+                            s.album.equals("Samsung Music", ignoreCase = true)
+                }
+                // Solo mezcla si el grupo cruza "calidad" (una fila buena + una débil).
+                // Evita fusionar dos versiones distintas del mismo título.
+                if (hasGoodId && hasPlaceholder) {
+                    val survivor = tGroup.maxByOrNull { songScore(it) } ?: continue
+                    for (dupe in tGroup) {
+                        if (dupe.id == survivor.id || dupe.id in consumed) continue
+                        mergeInto(survivor, dupe)
+                        consumed.add(dupe.id)
+                    }
+                }
             }
 
             var removedRows = 0
@@ -327,24 +358,8 @@ class SamsungMusicViewModel(application: Application) : AndroidViewModel(applica
                 val survivor = group.maxByOrNull { songScore(it) } ?: continue
                 for (dupe in group) {
                     if (dupe.id == survivor.id) continue
-                    // Transfiere favoritos y conteo de reproducciones
-                    if (dupe.isFavorite && !survivor.isFavorite) {
-                        repository.setFavorite(survivor.id, true)
-                    }
-                    if (dupe.playCount > 0) {
-                        repeat(dupe.playCount) {
-                            repository.incrementPlayCount(survivor.id)
-                        }
-                    }
-                    // Transfiere referencias de playlists
-                    val playlistsWith = playlistsWithSongs.value
-                    for (pw in playlistsWith) {
-                        if (pw.songs.any { it.id == dupe.id } &&
-                            !pw.songs.any { it.id == survivor.id }) {
-                            repository.addSongToPlaylist(pw.playlist.id, survivor.id)
-                        }
-                    }
-                    repository.deleteSong(dupe)
+                    mergeInto(survivor, dupe)
+                    consumed.add(dupe.id)
                     removedRows++
                 }
             }
@@ -370,8 +385,10 @@ class SamsungMusicViewModel(application: Application) : AndroidViewModel(applica
             if (removedRows > 0 || removedFiles > 0) {
                 android.util.Log.i("SamsungMusic", "Dedupe: $removedRows filas duplicadas, $removedFiles archivos huéfanos eliminados")
             }
+            Pair(removedRows, removedFiles)
         } catch (e: Exception) {
             android.util.Log.e("SamsungMusic", "Error en dedupe de canciones", e)
+            Pair(0, 0)
         }
     }
 
@@ -395,6 +412,95 @@ class SamsungMusicViewModel(application: Application) : AndroidViewModel(applica
                 e.printStackTrace()
             }
         }
+    }
+
+    /**
+     * Reescaneo manual (menú ⋮): recupera canciones del almacenamiento, fusiona
+     * duplicados y limpia placeholders de metadatos. Devuelve un resumen legible
+     * para el Toast de confirmación.
+     */
+    fun rescanSongs(onDone: (String) -> Unit) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val summary = try {
+                val before = repository.allSongs.firstOrNull()?.size ?: 0
+                val recovered = engine.scanAndRecoverExistingSongs()
+                val existing = repository.allSongs.firstOrNull() ?: emptyList()
+                val existingIds = existing.map { it.id }.toSet()
+                var added = 0
+                for (song in recovered) {
+                    if (song.id !in existingIds) {
+                        repository.insertSong(song)
+                        added++
+                    }
+                }
+                val (merged, orphans) = dedupeExistingSongs()
+                val migrated = migrateLegacyPlaceholders()
+                val after = repository.allSongs.firstOrNull()?.size ?: 0
+                buildString {
+                    append("$added nuevas · $merged duplicados fusionados · $migrated metadatos corregidos")
+                    if (orphans > 0) append(" · $orphans archivos huéfanos borrados")
+                    if (added == 0 && merged == 0 && migrated == 0 && after == before) {
+                        append(" · biblioteca al día")
+                    }
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("SamsungMusic", "Error en reescaneo", e)
+                "Error al reescanear: ${e.message ?: e.javaClass.simpleName}"
+            }
+            withContext(Dispatchers.Main) { onDone(summary) }
+        }
+    }
+
+    /**
+     * Migra filas viejas que aún muestran artista/álbum "Samsung Music" o
+     * "Descargas" hacia valores neutros; los datos reales los traerá el
+     * enriquecimiento con MusicBrainz.
+     */
+    private suspend fun migrateLegacyPlaceholders(): Int {
+        val songs = repository.allSongs.firstOrNull() ?: return 0
+        var migrated = 0
+        for (s in songs) {
+            val badArtist = s.artist.isBlank() || s.artist.equals("Samsung Music", ignoreCase = true)
+            val badAlbum = s.album.isBlank() || s.album.equals("Samsung Music", ignoreCase = true)
+            if (!badArtist && !badAlbum) continue
+            val newArtist = if (badArtist) "Artista desconocido" else s.artist
+            val newAlbum = if (badAlbum) "Descargas" else s.album
+            repository.updateMetadata(
+                id = s.id,
+                title = s.title,
+                artist = newArtist,
+                album = newAlbum,
+                coverArtUrl = s.coverArtUrl,
+                score = s.enrichmentScore,
+                releaseId = s.releaseId
+            )
+            migrated++
+        }
+        return migrated
+    }
+
+    /**
+     * Transfiere favoritos/playcount/referencias de playlists del duplicado al
+     * sobreviviente antes de borrar la fila duplicada.
+     */
+    private suspend fun mergeInto(survivor: Song, dupe: Song) {
+        if (dupe.isFavorite && !survivor.isFavorite) {
+            repository.setFavorite(survivor.id, true)
+        }
+        if (dupe.playCount > 0) {
+            repeat(dupe.playCount) {
+                repository.incrementPlayCount(survivor.id)
+            }
+        }
+        // Consulta fresca a la BD (el StateFlow puede estar sin suscriptores al arrancar)
+        val playlistsWith = repository.allPlaylistsWithSongs.firstOrNull() ?: emptyList()
+        for (pw in playlistsWith) {
+            if (pw.songs.any { it.id == dupe.id } &&
+                !pw.songs.any { it.id == survivor.id }) {
+                repository.addSongToPlaylist(pw.playlist.id, survivor.id)
+            }
+        }
+        repository.deleteSong(dupe)
     }
 
     /**

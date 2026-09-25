@@ -1,5 +1,6 @@
 package com.example.ui
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -7,6 +8,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
@@ -14,6 +16,8 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
@@ -40,6 +44,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -51,7 +56,10 @@ import androidx.compose.material.icons.filled.VerticalAlignTop
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.launch
+import android.content.Intent
+import android.widget.Toast
 import com.example.data.Song
+import com.example.player.CrashHandler
 import com.example.ui.components.CoverArtEditorDialog
 import com.example.ui.components.DownloadTabContent
 import com.example.ui.components.MiniPlayerBar
@@ -97,6 +105,12 @@ fun SamsungMusicApp(viewModel: SamsungMusicViewModel) {
     val isSearchingYouTube by viewModel.isSearchingYouTube.collectAsState()
     val youtubeSearchResults by viewModel.youtubeSearchResults.collectAsState()
     val localSearchResults by viewModel.localSearchResults.collectAsState()
+
+    // Diagnóstico: registro de errores (crash log) y estado del reescaneo
+    var showCrashLogDialog by remember { mutableStateOf(false) }
+    var crashLogContent by remember { mutableStateOf<String?>(null) }
+    var isRescanning by remember { mutableStateOf(false) }
+    var rescanResult by remember { mutableStateOf<String?>(null) }
 
     val currentSong by viewModel.playerManager.currentSong.collectAsState()
     val isPlaying by viewModel.playerManager.isPlaying.collectAsState()
@@ -147,7 +161,17 @@ fun SamsungMusicApp(viewModel: SamsungMusicViewModel) {
                 onShowStats = { viewModel.showStatistics() },
                 onCleanFolder = { viewModel.cleanMusicFolder() },
                 onEnrichAll = { viewModel.enrichAllSongs(force = true) },
-                onExportCsv = { viewModel.exportToCsv(context) }
+                onExportCsv = { viewModel.exportToCsv(context) },
+                onShowCrashLog = { showCrashLogDialog = true },
+                onRescanSongs = {
+                    if (!isRescanning) {
+                        isRescanning = true
+                        viewModel.rescanSongs { summary ->
+                            isRescanning = false
+                            rescanResult = summary
+                        }
+                    }
+                }
             )
         },
         bottomBar = {
@@ -520,6 +544,93 @@ fun SamsungMusicApp(viewModel: SamsungMusicViewModel) {
     // Stats Dialog
     statsData?.let { stats ->
         StatsDialog(stats = stats, onDismiss = { viewModel.dismissStatsDialog() })
+    }
+
+    // Diálogo: Registro de errores (crash log)
+    if (showCrashLogDialog) {
+        crashLogContent = remember(showCrashLogDialog) { CrashHandler.readLog(context) }
+        AlertDialog(
+            onDismissRequest = { showCrashLogDialog = false },
+            title = { Text("Registro de errores", fontWeight = FontWeight.Bold, fontSize = 18.sp) },
+            text = {
+                Column {
+                    val content = crashLogContent
+                    if (content == null) {
+                        Text(
+                            "No hay errores registrados. \uD83C\uDF89",
+                            fontSize = 14.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    } else {
+                        Text(
+                            "Últimos errores detectados (stack traces):",
+                            fontSize = 13.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(bottom = 8.dp)
+                        )
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = 320.dp)
+                                .verticalScroll(rememberScrollState())
+                                .background(
+                                    MaterialTheme.colorScheme.surfaceVariant,
+                                    MaterialTheme.shapes.small
+                                )
+                                .padding(10.dp)
+                        ) {
+                            Text(
+                                text = content,
+                                fontSize = 11.sp,
+                                lineHeight = 15.sp,
+                                fontFamily = FontFamily.Monospace,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                if (crashLogContent != null) {
+                    TextButton(onClick = {
+                        try {
+                            CrashHandler.shareIntent(context)?.let { intent ->
+                                context.startActivity(Intent.createChooser(intent, "Compartir registro de errores"))
+                            }
+                        } catch (_: Exception) {
+                        }
+                    }) {
+                        Text("Compartir")
+                    }
+                }
+            },
+            dismissButton = {
+                Row {
+                    if (crashLogContent != null) {
+                        TextButton(onClick = {
+                            CrashHandler.clearLogFile(context)
+                            crashLogContent = null
+                        }) {
+                            Text("Borrar", color = MaterialTheme.colorScheme.error)
+                        }
+                    }
+                    TextButton(onClick = { showCrashLogDialog = false }) {
+                        Text("Cerrar")
+                    }
+                }
+            }
+        )
+    }
+
+    // Toast de resultado del reescaneo
+    rescanResult?.let { summary ->
+        LaunchedEffect(summary) {
+            try {
+                android.widget.Toast.makeText(context, summary, Toast.LENGTH_LONG).show()
+            } catch (_: Exception) {
+            }
+            rescanResult = null
+        }
     }
 
     // Add To Playlist Dialog

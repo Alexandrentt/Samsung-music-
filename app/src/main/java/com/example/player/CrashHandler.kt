@@ -76,6 +76,25 @@ object CrashHandler {
         return if (f.exists() && f.length() > 0) f else null
     }
 
+    /** Lee el final del registro de errores para mostrarlo en pantalla (o null si no hay). */
+    fun readLog(context: Context, maxChars: Int = 20_000): String? {
+        val file = crashLogFile(context) ?: return null
+        return try {
+            val text = file.readText()
+            if (text.length <= maxChars) text else "… (recortado)\n" + text.takeLast(maxChars)
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    /** Borra el registro de errores (acción "Borrar" del diálogo). */
+    fun clearLogFile(context: Context) {
+        try {
+            crashLogFile(context)?.delete()
+        } catch (_: Exception) {
+        }
+    }
+
     /** Intent para compartir el registro de errores (usado desde la UI). */
     fun shareIntent(context: Context): Intent? {
         val file = crashLogFile(context) ?: return null
