@@ -29,14 +29,41 @@ class MusicaEngine(private val context: Context) {
 
     /**
      * Carpeta de almacenamiento para canciones descargadas.
-     * Utiliza el directorio app-specific garantizado para lectura y escritura
-     * sin errores de Scoped Storage ni permisos EACCES en Android 11+.
+     *
+     * Prioriza la carpeta PÚBLICA /Music/SamsungMusic: los archivos que viven ahí
+     * NO se borran cuando el usuario desinstala la app, y al reinstalar son
+     * recuperados automáticamente por [scanAndRecoverExistingSongs], que ya
+     * escanea esa misma ruta.
+     *
+     * Si el sistema no permite escribir ahí (permisos), hace fallback al
+     * directorio app-specific y luego al interno, garantizando que la descarga
+     * siempre tenga destino válido.
      */
     val musicFolder: File by lazy {
-        val appMusic = context.getExternalFilesDir(Environment.DIRECTORY_MUSIC)
-            ?: File(context.filesDir, "Music")
-        if (!appMusic.exists()) appMusic.mkdirs()
-        appMusic
+        val candidates = mutableListOf<File>()
+        try {
+            candidates.add(
+                File(
+                    Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC),
+                    "SamsungMusic"
+                )
+            )
+        } catch (_: Exception) {}
+        context.getExternalFilesDir(Environment.DIRECTORY_MUSIC)?.let { candidates.add(it) }
+        candidates.add(File(context.filesDir, "Music"))
+
+        // Elige la primera carpeta donde realmente podamos crear archivos.
+        candidates.firstOrNull { dir ->
+            try {
+                if (!dir.exists()) dir.mkdirs()
+                val probe = File(dir, ".write_probe_tmp")
+                val ok = probe.createNewFile()
+                if (ok) probe.delete()
+                ok
+            } catch (_: Exception) {
+                false
+            }
+        } ?: candidates.last()
     }
 
     /**
