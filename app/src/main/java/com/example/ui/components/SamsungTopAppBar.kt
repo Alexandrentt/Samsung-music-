@@ -11,6 +11,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bedtime
 import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
@@ -56,7 +57,8 @@ fun SamsungTopAppBar(
     onEnrichAll: () -> Unit,
     onExportCsv: () -> Unit,
     onShowCrashLog: () -> Unit = {},
-    onRescanSongs: () -> Unit = {}
+    onRescanSongs: () -> Unit = {},
+    onPickMusicFolder: () -> Unit = {}
 ) {
     var showMenu by remember { mutableStateOf(false) }
     val keyboardController = LocalSoftwareKeyboardController.current
@@ -187,6 +189,21 @@ fun SamsungTopAppBar(
                         onClick = {
                             showMenu = false
                             onExportCsv()
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Carpeta de música…") },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = Icons.Default.FolderOpen,
+                                contentDescription = null,
+                                modifier = Modifier.size(20.dp),
+                                tint = MaterialTheme.colorScheme.onSurface
+                            )
+                        },
+                        onClick = {
+                            showMenu = false
+                            onPickMusicFolder()
                         }
                     )
                     DropdownMenuItem(

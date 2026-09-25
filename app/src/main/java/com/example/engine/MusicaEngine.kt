@@ -70,7 +70,9 @@ class MusicaEngine(private val context: Context) {
      * Escanea canciones ya descargadas en la carpeta de música compartida y en la
      * carpeta interna legacy para recuperarlas tras reinstalación o borrado de caché.
      */
-    suspend fun scanAndRecoverExistingSongs(): List<Song> = withContext(Dispatchers.IO) {
+    suspend fun scanAndRecoverExistingSongs(
+        knownFileSizes: Map<Long, Long> = emptyMap()
+    ): List<Song> = withContext(Dispatchers.IO) {
         val recovered = mutableListOf<Song>()
         val foldersToScan = mutableListOf<File>()
         try {
@@ -103,7 +105,11 @@ class MusicaEngine(private val context: Context) {
                 // que el dedupe lo fusione por título con su equivalente completo.
                 val id = if (cleanId.length == 11) "yt_$cleanId" else "local_${audioFile.name.hashCode()}"
 
-                val probedMs = YouTubeAudioDownloader.probeDurationMs(audioFile.absolutePath)
+                // PERF: MediaPlayer.prepare() por archivo tarda ~100-500 ms y
+                // se disparaba en cada arranque/menú para TODOS los archivos.
+                // Si ya conocemos el tamaño (BD), se omite el probe.
+                val probedMs = if (knownFileSizes[audioFile.length()] != null) -1L else
+                    YouTubeAudioDownloader.probeDurationMs(audioFile.absolutePath)
                 val lrcFile = File(audioFile.parentFile, "${rawName}.lrc")
                 val lrcPath = if (lrcFile.exists() && lrcFile.length() > 0) lrcFile.absolutePath else null
 
@@ -151,7 +157,9 @@ class MusicaEngine(private val context: Context) {
         t = t.replace(Regex("\\[[^\\]]*\\]"), "")
         val garbageRegex = Regex("(?i)(official\\s*(video|audio|music\\s*video|lyric[s]?|visualizer)|lyrics?|sub[s]?\\.?\\s*(español|english|espanol)?|video\\s*oficial|videoclip\\s*oficial|hd|4k|remastered?\\s*\\d*)")
         t = garbageRegex.replace(t, "")
-        return t.replace(Regex("\\s+"), " ").trim(' ', '-', '–', '—', '|', ':')
+        // Frases de la plataforma que no forman parte del título/artista
+        t = t.replace(Regex("(?i)\\b(youtube(\\s*music)?|topic)\\b"), " ")
+        return t.replace(Regex("\\s+"), " ").trim(' ', '-', '–', '—', '|', ':', '•')
     }
 
     fun normalizar(raw: String): String {
@@ -283,7 +291,10 @@ class MusicaEngine(private val context: Context) {
                     }
                 }
 
-                if (bestScore > 40 && bestTitle.isNotBlank()) {
+                // Umbral bajo: solo coincidencias de verdad. Con 40 entraban
+                // títulos parecidos ajenos ("Si estuviera contigo" recibió el
+                // autor de otra obra con el mismo título).
+                if (bestScore >= 75 && bestTitle.isNotBlank()) {
                     val coverUrl = if (releaseId != null) "$CAA_API/release/$releaseId/front-250.jpg" else null
                     return@withContext EnrichmentResult(
                         title = bestTitle,
@@ -318,7 +329,7 @@ class MusicaEngine(private val context: Context) {
         return EnrichmentResult(
             title = title,
             artist = artist,
-            album = "YouTube Music",
+            album = "Descargas",
             coverArtUrl = "https://img.youtube.com/vi/$videoId/hqdefault.jpg",
             score = 65,
             releaseId = null,
@@ -679,7 +690,7 @@ class MusicaEngine(private val context: Context) {
             EnrichmentResult(
                 title = if (partes.size == 2) partes[1].trim() else clean,
                 artist = if (partes.size == 2) partes[0].trim() else channelYt.ifBlank { "YouTube" },
-                album = "YouTube Music",
+                album = "Descargas",
                 coverArtUrl = "https://img.youtube.com/vi/$cleanId/hqdefault.jpg",
                 score = 65,
                 releaseId = null,
@@ -878,6 +889,75 @@ class MusicaEngine(private val context: Context) {
         }
 
         downloadedSongs
+    }
+
+    /**
+     * Escanea la carpeta elegida por el usuario vía SAF (estilo Samsung Music)
+     * con documentFile de androidx. Recorre la carpeta y sus subcarpetas hasta
+     * 2 niveles. Los archivos ya conocidos (por tamaño) no se re-proban.
+     */
+    suspend fun scanUserFolder(
+        treeUriString: String,
+        knownFileSizes: Map<Long, Long> = emptyMap()
+    ): List<Song> = withContext(Dispatchers.IO) {
+        val recovered = mutableListOf<Song>()
+        try {
+            val treeUri = android.net.Uri.parse(treeUriString)
+            val root = androidx.documentfile.provider.DocumentFile.fromTreeUri(context, treeUri)
+                ?: return@withContext recovered
+
+            val pending = ArrayDeque<Pair<androidx.documentfile.provider.DocumentFile, Int>>()
+            pending.add(root to 0)
+            val seenUris = mutableSetOf<String>()
+
+            while (pending.isNotEmpty()) {
+                val (dir, depth) = pending.removeFirst()
+                val children = dir.listFiles()
+                for (child in children) {
+                    if (!seenUris.add(child.uri.toString())) continue
+                    if (child.isDirectory) {
+                        if (depth < 2) pending.add(child to depth + 1)
+                        continue
+                    }
+                    val name = child.name ?: continue
+                    val isAudio = name.endsWith(".m4a") || name.endsWith(".mp3") || name.endsWith(".wav")
+                    if (!isAudio || child.length() <= 10_000L) continue
+
+                    val rawName = name.substringBeforeLast('.')
+                    val cleanId = rawName.substringAfterLast('_').take(11)
+                    val baseTitle = rawName.substringBeforeLast('_').replace('_', ' ').trim()
+                    val id = if (cleanId.length == 11) "yt_$cleanId" else "local_${name.hashCode()}"
+
+                    val probedMs = if (knownFileSizes[child.length()] != null) -1L else
+                        YouTubeAudioDownloader.probeDurationMs(child.uri.toString())
+                    val lrcDoc = dir.findFile("$rawName.lrc")
+                    val lrcPath = if (lrcDoc != null && lrcDoc.length() > 0) lrcDoc.uri.toString() else null
+
+                    recovered.add(
+                        Song(
+                            id = id,
+                            title = baseTitle.ifBlank { "Canción descargada" },
+                            artist = "Artista desconocido",
+                            album = "Descargas",
+                            durationMs = if (probedMs > 0) probedMs else 180000L,
+                            filePath = child.uri.toString(),
+                            fileSizeBytes = child.length(),
+                            coverArtUrl = if (cleanId.length == 11) "https://img.youtube.com/vi/$cleanId/hqdefault.jpg" else null,
+                            dateAdded = child.lastModified(),
+                            enrichmentScore = 80,
+                            lrcFilePath = lrcPath,
+                            isDownloaded = true,
+                            bitrate = "320 kbps",
+                            youtubeVideoId = if (cleanId.length == 11) cleanId else null,
+                            youtubeChannel = "YouTube"
+                        )
+                    )
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+        recovered
     }
 
     fun limpiarCarpeta(canciones: List<Song>): Pair<Int, Int> {

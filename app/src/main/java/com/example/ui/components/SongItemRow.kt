@@ -15,6 +15,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.DragHandle
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.Image
@@ -56,6 +57,7 @@ fun SongItemRow(
     onPlayNext: () -> Unit,
     onAddToPlaylist: () -> Unit,
     onEditCover: () -> Unit = {},
+    onEditInfo: (() -> Unit)? = null,
     onDelete: () -> Unit,
     onLongClick: (() -> Unit)? = null,
     onMoveUp: (() -> Unit)? = null,
@@ -129,7 +131,7 @@ fun SongItemRow(
 
             val details = buildString {
                 append(song.artist)
-                if (song.hasLyrics) append(" • Letra")
+                if (song.hasLyrics) append(" • Letra") else append(" • Sin letra")
                 if (song.enrichmentScore >= 70) append(" • MB")
             }
             Text(
@@ -186,6 +188,16 @@ fun SongItemRow(
                         onEditCover()
                     }
                 )
+                if (onEditInfo != null) {
+                    DropdownMenuItem(
+                        text = { Text("Editar datos de la canción") },
+                        leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                        onClick = {
+                            showMenu = false
+                            onEditInfo.invoke()
+                        }
+                    )
+                }
                 if (onMoveUp != null || onMoveDown != null) {
                     DropdownMenuItem(
                         text = { Text("Subir posición") },

@@ -152,6 +152,13 @@ class AudioPlayerManager(private val context: Context) {
         }
     }
 
+    /** Refresca la canción actual tras editar sus metadatos (título/artista/álbum). */
+    fun updateCurrentSongInfo(updated: Song) {
+        _currentSong.value = updated
+        _queue.value = _queue.value.map { if (it.id == updated.id) updated else it }
+        notifyForegroundService(_isPlaying.value)
+    }
+
     fun updateCurrentSongCover(newCoverUrl: String) {
         val cur = _currentSong.value ?: return
         val updated = cur.copy(coverArtUrl = newCoverUrl)
@@ -352,6 +359,7 @@ class AudioPlayerManager(private val context: Context) {
                 scope.launch(Dispatchers.IO) {
                     val preparedSong = ensureSongAudioFile(song)
                     withContext(Dispatchers.Main) {
+                        if (_currentSong.value?.id != song.id) return@withContext // llegó otra petición
                         if (preparedSong != null) {
                             _currentSong.value = preparedSong
                             _playbackError.value = null
@@ -420,8 +428,28 @@ class AudioPlayerManager(private val context: Context) {
         _currentLyrics.value = emptyList()
     }
 
+    /**
+     * Preparación ASÍNCRONA de la nueva canción.
+     *
+     * Antes: setDataSource+prepare() corrían en el hilo llamador (Main) y
+     * congelaban la UI en cada cambio de canción; además el MediaPlayer
+     * anterior seguía sonando hasta que el prepare terminaba — por eso el
+     * audio "se quedaba en la canción anterior y luego cambiaba".
+     *
+     * Ahora: se detiene el audio viejo INMEDIATAMENTE, el prepare corre en IO
+     * y si mientras tanto se pidió otra canción, el resultado se descarta.
+     */
     private fun startPlayback(song: Song) {
-        mediaPlayer?.release()
+        // 1) Silencia y libera el reproductor anterior al instante (sin overlap)
+        progressJob?.cancel()
+        try {
+            mediaPlayer?.pause()
+        } catch (_: Exception) {
+        }
+        try {
+            mediaPlayer?.release()
+        } catch (_: Exception) {
+        }
         mediaPlayer = null
         _currentPositionMs.value = 0L
         _isPlaying.value = false
@@ -432,6 +460,7 @@ class AudioPlayerManager(private val context: Context) {
             scope.launch(Dispatchers.IO) {
                 val prepared = ensureSongAudioFile(song)
                 withContext(Dispatchers.Main) {
+                    if (_currentSong.value?.id != song.id) return@withContext
                     if (prepared != null) {
                         _currentSong.value = prepared
                         startPlayback(prepared)
@@ -444,51 +473,70 @@ class AudioPlayerManager(private val context: Context) {
             return
         }
 
-        try {
-            requestAudioFocus()
+        _playbackError.value = null
+        requestAudioFocus()
 
-            val mp = MediaPlayer()
-            mp.setDataSource(file.absolutePath)
-            mp.prepare()
+        // 2) setDataSource+prepare en IO: la UI nunca se bloquea
+        scope.launch(Dispatchers.IO) {
+            val prepared: MediaPlayer? = try {
+                val mp = MediaPlayer()
+                mp.setDataSource(file.absolutePath)
+                mp.prepare()
+                mp
+            } catch (e: Exception) {
+                e.printStackTrace()
+                null
+            }
 
-            val actualDuration = if (mp.duration > 0) mp.duration.toLong() else song.durationMs
-            _durationMs.value = actualDuration
-
-            mp.setOnCompletionListener {
-                // Callback del hilo del sistema: cualquier excepción aquí mata
-                // el proceso y se percibe como "la app se cierra sola".
-                try {
-                    handleSongCompletion()
-                } catch (e: Exception) {
-                    android.util.Log.e("AudioPlayerManager", "Error al pasar a la siguiente canción", e)
+            withContext(Dispatchers.Main) {
+                // 3) Descarta preparaciones obsoletas por saltos rápidos
+                if (_currentSong.value?.id != song.id) {
+                    try {
+                        prepared?.release()
+                    } catch (_: Exception) {
+                    }
+                    return@withContext
                 }
-            }
-            mp.setOnErrorListener { _, what, extra ->
-                _playbackError.value = "Error de reproducción ($what/$extra)"
-                _isPlaying.value = false
-                notifyForegroundService(false)
-                true
-            }
+                if (prepared == null) {
+                    _playbackError.value = "No se pudo reproducir el audio (archivo no compatible)"
+                    notifyForegroundService(false)
+                    return@withContext
+                }
 
-            // Aplicar volumen normal o atenuado según estado de ducking
-            if (isDuckedByFocus) {
-                mp.setVolume(0.2f, 0.2f)
-            } else {
-                mp.setVolume(1.0f, 1.0f)
-            }
+                val mp = prepared
+                val actualDuration = if (mp.duration > 0) mp.duration.toLong() else song.durationMs
+                _durationMs.value = actualDuration
 
-            mp.start()
-            mediaPlayer = mp
-            _isPlaying.value = true
-            _playbackError.value = null
-            startProgressTicker()
-            notifyForegroundService(true)
-        } catch (e: Exception) {
-            e.printStackTrace()
-            mediaPlayer?.release()
-            mediaPlayer = null
-            _playbackError.value = "No se pudo reproducir el audio: ${e.message ?: "archivo no compatible"}"
-            notifyForegroundService(false)
+                mp.setOnCompletionListener {
+                    // Callback del hilo del sistema: cualquier excepción aquí mata
+                    // el proceso y se percibe como "la app se cierra sola".
+                    try {
+                        handleSongCompletion()
+                    } catch (e: Exception) {
+                        android.util.Log.e("AudioPlayerManager", "Error al pasar a la siguiente canción", e)
+                    }
+                }
+                mp.setOnErrorListener { _, what, extra ->
+                    _playbackError.value = "Error de reproducción ($what/$extra)"
+                    _isPlaying.value = false
+                    notifyForegroundService(false)
+                    true
+                }
+
+                // Aplicar volumen normal o atenuado según estado de ducking
+                if (isDuckedByFocus) {
+                    mp.setVolume(0.2f, 0.2f)
+                } else {
+                    mp.setVolume(1.0f, 1.0f)
+                }
+
+                mp.start()
+                mediaPlayer = mp
+                _isPlaying.value = true
+                _playbackError.value = null
+                startProgressTicker()
+                notifyForegroundService(true)
+            }
         }
     }
 
@@ -751,7 +799,9 @@ class AudioPlayerManager(private val context: Context) {
                 }
 
                 val now = System.currentTimeMillis()
-                if (now - lastNotifTick >= 2000L) {
+                // Cada 5 s: cada notificación re-renderiza RemoteViews + widgets;
+                // cada 2 s era trabajo innecesario que se notaba como lag.
+                if (now - lastNotifTick >= 5000L) {
                     lastNotifTick = now
                     notifyForegroundService(_isPlaying.value)
                 }

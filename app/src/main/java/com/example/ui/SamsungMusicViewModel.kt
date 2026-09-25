@@ -155,6 +155,75 @@ class SamsungMusicViewModel(application: Application) : AndroidViewModel(applica
         _songForCoverEdit.value = null
     }
 
+    /**
+     * Migra la biblioteca a la carpeta elegida por el usuario (SAF, estilo
+     * Samsung Music): escanea esa carpeta y sus subcarpetas inmediatas y da de
+     * alta las canciones nuevas. La preferencia persiste entre sesiones.
+     */
+    fun setMusicFolderUri(uri: String) {
+        prefs.edit().putString("music_folder_uri", uri).apply()
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val recovered = engine.scanUserFolder(uri, knownFileSizes = emptyMap())
+                val existing = repository.allSongs.firstOrNull() ?: emptyList()
+                val existingIds = existing.map { it.id }.toSet()
+                var added = 0
+                for (song in recovered) {
+                    if (song.id !in existingIds) {
+                        repository.insertSong(song)
+                        added++
+                    }
+                }
+                withContext(Dispatchers.Main) {
+                    showFeedbackToast(
+                        if (added > 0) "Carpeta añadida: $added canciones nuevas" else "Carpeta configurada (sin canciones nuevas)"
+                    )
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    showFeedbackToast("No se pudo leer la carpeta: ${e.message ?: "error"}")
+                }
+            }
+        }
+    }
+
+    fun clearMusicFolder() {
+        prefs.edit().remove("music_folder_uri").apply()
+        showFeedbackToast("Carpeta personalizada eliminada; se usa /Music/SamsungMusic")
+    }
+
+    fun userFolderUri(): String? = prefs.getString("music_folder_uri", null)
+
+    /**
+     * Editor de metadatos (título/artista/álbum) desde el menú de la canción.
+     */
+    fun updateSongInfo(songId: String, title: String, artist: String, album: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val s = repository.getSongById(songId) ?: return@launch
+                repository.updateMetadata(
+                    id = songId,
+                    title = title.ifBlank { s.title },
+                    artist = artist.ifBlank { s.artist },
+                    album = album.ifBlank { s.album },
+                    coverArtUrl = s.coverArtUrl,
+                    score = s.enrichmentScore,
+                    releaseId = s.releaseId
+                )
+                // Si es la canción actual, refresca notificación/widget con el nuevo texto
+                if (playerManager.currentSong.value?.id == songId) {
+                    val updated = s.copy(title = title.ifBlank { s.title }, artist = artist.ifBlank { s.artist }, album = album.ifBlank { s.album })
+                    withContext(Dispatchers.Main) {
+                        playerManager.updateCurrentSongInfo(updated)
+                    }
+                }
+                withContext(Dispatchers.Main) { showFeedbackToast("Datos actualizados") }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) { showFeedbackToast("No se pudo actualizar") }
+            }
+        }
+    }
+
     fun updateSongCoverArt(songId: String, newCoverPath: String) {
         viewModelScope.launch(Dispatchers.IO) {
             repository.updateCoverArt(songId, newCoverPath)
@@ -274,6 +343,27 @@ class SamsungMusicViewModel(application: Application) : AndroidViewModel(applica
         }
         viewModelScope.launch {
             seedInitialMusic()
+        }
+        // Migración: el fallback antiguo ponía album="YouTube Music"; ese texto
+        // no es un álbum. Album neutro; el artista real lo trae MusicBrainz.
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val songs = repository.allSongs.firstOrNull() ?: return@launch
+                for (s in songs) {
+                    if (s.album.equals("YouTube Music", ignoreCase = true)) {
+                        repository.updateMetadata(
+                            id = s.id,
+                            title = s.title,
+                            artist = s.artist,
+                            album = "Descargas",
+                            coverArtUrl = s.coverArtUrl,
+                            score = s.enrichmentScore,
+                            releaseId = s.releaseId
+                        )
+                    }
+                }
+            } catch (_: Exception) {
+            }
         }
         recoverExistingSongs()
         viewModelScope.launch(Dispatchers.IO) { dedupeExistingSongs() }
@@ -482,8 +572,12 @@ class SamsungMusicViewModel(application: Application) : AndroidViewModel(applica
     private fun recoverExistingSongs() {
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                val recovered = engine.scanAndRecoverExistingSongs()
                 val existing = repository.allSongs.firstOrNull() ?: emptyList()
+                // PERF: evita re-probar (MediaPlayer) archivos que ya están en la BD
+                val knownSizes = existing.mapNotNull { s ->
+                    if (s.fileSizeBytes > 0) s.fileSizeBytes to s.fileSizeBytes else null
+                }.toMap()
+                val recovered = engine.scanAndRecoverExistingSongs(knownSizes)
                 val existingIds = existing.map { it.id }.toSet()
                 for (song in recovered) {
                     if (song.id !in existingIds) {
@@ -505,7 +599,11 @@ class SamsungMusicViewModel(application: Application) : AndroidViewModel(applica
         viewModelScope.launch(Dispatchers.IO) {
             val summary = try {
                 val before = repository.allSongs.firstOrNull()?.size ?: 0
-                val recovered = engine.scanAndRecoverExistingSongs()
+                val existingForSizes = repository.allSongs.firstOrNull() ?: emptyList()
+                val knownSizes = existingForSizes.mapNotNull { s ->
+                    if (s.fileSizeBytes > 0) s.fileSizeBytes to s.fileSizeBytes else null
+                }.toMap()
+                val recovered = engine.scanAndRecoverExistingSongs(knownSizes)
                 val existing = repository.allSongs.firstOrNull() ?: emptyList()
                 val existingIds = existing.map { it.id }.toSet()
                 var added = 0

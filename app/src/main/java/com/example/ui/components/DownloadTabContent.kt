@@ -44,6 +44,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -390,13 +391,6 @@ private fun DownloadStatusCard(progress: DownloadProgress) {
                             fontSize = 14.sp,
                             color = MaterialTheme.colorScheme.onPrimaryContainer
                         )
-                        if (progress.bytesTotal > 0) {
-                            Text(
-                                text = "${formatBytes(progress.bytesDownloaded)} / ${formatBytes(progress.bytesTotal)}",
-                                fontSize = 11.sp,
-                                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
-                            )
-                        }
                     }
                 }
             }
@@ -419,14 +413,13 @@ private fun DownloadStatusCard(progress: DownloadProgress) {
             }
 
             val total = progress.totalItems
-            if (total > 1) {
+            if (total > 1 && (hasError || isDone)) {
                 Text(
                     text = "Canción ${progress.currentItemIndex} de $total",
                     fontSize = 12.sp,
                     color = when {
                         hasError -> MaterialTheme.colorScheme.onErrorContainer
-                        isDone -> MaterialTheme.colorScheme.onTertiaryContainer
-                        else -> MaterialTheme.colorScheme.onPrimaryContainer
+                        else -> MaterialTheme.colorScheme.onTertiaryContainer
                     }.copy(alpha = 0.8f)
                 )
             }
@@ -440,14 +433,44 @@ private fun DownloadStatusCard(progress: DownloadProgress) {
                     color = MaterialTheme.colorScheme.onErrorContainer
                 )
             } else if (!isDone) {
+                // Progreso grande y centrado: % en negrita a la izquierda y
+                // bytes a la derecha, con barra gruesa debajo (más "One UI")
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = "${(progress.percent * 100).toInt()}%",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 22.sp,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                    )
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Column {
+                        if (progress.bytesTotal > 0) {
+                            Text(
+                                text = "${formatBytes(progress.bytesDownloaded)} de ${formatBytes(progress.bytesTotal)}",
+                                fontSize = 12.sp,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
+                            )
+                        }
+                        if (total > 1) {
+                            Text(
+                                text = "Canción ${progress.currentItemIndex} de $total",
+                                fontSize = 12.sp,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
+                            )
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.height(8.dp))
                 LinearProgressIndicator(
                     progress = { progress.percent.coerceIn(0f, 1f) },
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(6.dp)
-                        .clip(RoundedCornerShape(3.dp)),
+                        .height(8.dp)
+                        .clip(RoundedCornerShape(4.dp)),
                     color = MaterialTheme.colorScheme.primary,
-                    trackColor = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.15f)
+                    trackColor = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.15f),
+                    strokeCap = StrokeCap.Round,
+                    gapSize = 0.dp
                 )
                 Spacer(modifier = Modifier.height(6.dp))
                 Text(

@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.Spacer
@@ -33,6 +34,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -55,6 +57,8 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material.icons.filled.SwapVert
 import androidx.compose.material.icons.filled.VerticalAlignBottom
 import androidx.compose.material.icons.filled.VerticalAlignTop
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.launch
@@ -128,6 +132,24 @@ fun SamsungMusicApp(viewModel: SamsungMusicViewModel) {
     var songToReorder by remember { mutableStateOf<Song?>(null) }
     var isQuickReorderingMode by remember { mutableStateOf(false) }
 
+    // Editor de datos (título/artista/álbum) y selector de carpeta de música
+    var songToEditInfo by remember { mutableStateOf<Song?>(null) }
+    var showFolderPickerHelp by remember { mutableStateOf(false) }
+    val folderPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocumentTree()
+    ) { uri ->
+        if (uri != null) {
+            try {
+                context.contentResolver.takePersistableUriPermission(
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            } catch (_: Exception) {
+            }
+            viewModel.setMusicFolderUri(uri.toString())
+        }
+    }
+
     // Pager para deslizar entre pestañas con el táctil
     val tabs = remember { SamsungTab.values() }
     val pagerState = rememberPagerState(
@@ -173,7 +195,8 @@ fun SamsungMusicApp(viewModel: SamsungMusicViewModel) {
                             rescanResult = summary
                         }
                     }
-                }
+                },
+                onPickMusicFolder = { showFolderPickerHelp = true }
             )
         },
         bottomBar = {
@@ -256,6 +279,7 @@ fun SamsungMusicApp(viewModel: SamsungMusicViewModel) {
                             onPlayNext = { viewModel.playNext(listOf(it)) },
                             onAddToPlaylist = { viewModel.openAddToPlaylistDialog(it) },
                             onEditCover = { viewModel.openCoverArtEditor(it) },
+                            onEditInfo = { songToEditInfo = it },
                             onDeleteSong = { viewModel.deleteSong(it) },
                             onSongLongClick = { songToReorder = it },
                             onMoveSong = { id, offset -> viewModel.moveSong(id, offset) },
@@ -280,6 +304,7 @@ fun SamsungMusicApp(viewModel: SamsungMusicViewModel) {
                             onPlayNext = { viewModel.playNext(listOf(it)) },
                             onAddToPlaylist = { viewModel.openAddToPlaylistDialog(it) },
                             onEditCover = { viewModel.openCoverArtEditor(it) },
+                            onEditInfo = { songToEditInfo = it },
                             onDeleteSong = { viewModel.deleteSong(it) },
                             onSongLongClick = { songToReorder = it },
                             onMoveSong = { id, offset -> viewModel.moveSong(id, offset) },
@@ -635,6 +660,99 @@ fun SamsungMusicApp(viewModel: SamsungMusicViewModel) {
         }
     }
 
+    // Diálogo: editar datos de la canción (título/artista/álbum)
+    songToEditInfo?.let { song ->
+        var editTitle by remember(song.id) { mutableStateOf(song.title) }
+        var editArtist by remember(song.id) { mutableStateOf(song.artist) }
+        var editAlbum by remember(song.id) { mutableStateOf(song.album) }
+        AlertDialog(
+            onDismissRequest = { songToEditInfo = null },
+            title = { Text("Editar datos", fontWeight = FontWeight.Bold, fontSize = 18.sp) },
+            text = {
+                Column {
+                    OutlinedTextField(
+                        value = editTitle,
+                        onValueChange = { editTitle = it },
+                        label = { Text("Título") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = editArtist,
+                        onValueChange = { editArtist = it },
+                        label = { Text("Artista") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = editAlbum,
+                        onValueChange = { editAlbum = it },
+                        label = { Text("Álbum") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.updateSongInfo(song.id, editTitle, editArtist, editAlbum)
+                    songToEditInfo = null
+                }) { Text("Guardar") }
+            },
+            dismissButton = {
+                TextButton(onClick = { songToEditInfo = null }) { Text("Cancelar") }
+            }
+        )
+    }
+
+    // Diálogo: ayuda + selector de carpeta de música (estilo Samsung Music)
+    if (showFolderPickerHelp) {
+        AlertDialog(
+            onDismissRequest = { showFolderPickerHelp = false },
+            title = { Text("Carpeta de música", fontWeight = FontWeight.Bold, fontSize = 18.sp) },
+            text = {
+                Column {
+                    Text(
+                        "Elige de qué carpeta del teléfono se lee tu música. " +
+                                "Se escanean esa carpeta y sus subcarpetas (hasta 2 niveles): " +
+                                "Música, Descargas, WhatsApp o la que prefieras.",
+                        fontSize = 14.sp
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+                    val current = viewModel.userFolderUri()
+                    Text(
+                        if (current != null) "Actual: carpeta personalizada (puedes quitarla)."
+                        else "Actual: /Music/SamsungMusic (descargas de la app).",
+                        fontSize = 13.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showFolderPickerHelp = false
+                    try {
+                        folderPicker.launch(null)
+                    } catch (_: Exception) {
+                    }
+                }) { Text("Elegir carpeta…") }
+            },
+            dismissButton = {
+                Row {
+                    if (viewModel.userFolderUri() != null) {
+                        TextButton(onClick = {
+                            viewModel.clearMusicFolder()
+                            showFolderPickerHelp = false
+                        }) { Text("Quitar", color = MaterialTheme.colorScheme.error) }
+                    }
+                    TextButton(onClick = { showFolderPickerHelp = false }) { Text("Cerrar") }
+                }
+            }
+        )
+    }
+
     // Add To Playlist Dialog
     songToAddToPlaylist?.let { song ->
         val playlists = playlistsWithSongs.map { it.playlist }
@@ -687,6 +805,7 @@ private fun SongsTabContent(
     onPlayNext: (Song) -> Unit,
     onAddToPlaylist: (Song) -> Unit,
     onEditCover: (Song) -> Unit = {},
+    onEditInfo: ((Song) -> Unit)? = null,
     onDeleteSong: (Song) -> Unit,
     onSongLongClick: (Song) -> Unit = {},
     onMoveSong: (songId: String, offset: Int) -> Unit = { _, _ -> },
@@ -840,6 +959,7 @@ private fun SongsTabContent(
                         onPlayNext = { onPlayNext(song) },
                         onAddToPlaylist = { onAddToPlaylist(song) },
                         onEditCover = { onEditCover(song) },
+                        onEditInfo = onEditInfo?.let { fn -> { fn(song) } },
                         onDelete = { onDeleteSong(song) },
                         onLongClick = { onSongLongClick(song) },
                         onMoveUp = { onMoveSong(song.id, -1) },
