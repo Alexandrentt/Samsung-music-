@@ -789,6 +789,17 @@ fun SamsungMusicApp(viewModel: SamsungMusicViewModel) {
     }
 }
 
+/** Etiqueta corta para el chip de orden ("Fecha de adición" no cabe). */
+private fun shortSortLabel(field: SongSortField): String = when (field) {
+    SongSortField.CUSTOM -> "Orden"
+    SongSortField.TITLE -> "Título"
+    SongSortField.ARTIST -> "Artista"
+    SongSortField.ALBUM -> "Álbum"
+    SongSortField.DATE_ADDED -> "Fecha"
+    SongSortField.DURATION -> "Duración"
+    SongSortField.PLAY_COUNT -> "Reprod."
+}
+
 @Composable
 private fun SongsTabContent(
     songs: List<Song>,
@@ -840,7 +851,7 @@ private fun SongsTabContent(
                 modifier = Modifier.weight(1f, fill = false)
             )
 
-            Spacer(modifier = Modifier.weight(0.5f))
+            Spacer(modifier = Modifier.weight(1f))
 
             // Reorder toggle button
             IconButton(onClick = onToggleReorderingMode) {
@@ -852,14 +863,14 @@ private fun SongsTabContent(
                 )
             }
 
-            // Sort field chip with menu (field + quick direction toggle inside)
+            // Sort field chip with menu (etiqueta corta: "Fecha" no "Fecha de adición")
             FilterChip(
                 selected = true,
                 onClick = { showSortMenu = true },
                 label = {
                     Text(
-                        sortOrder.field.displayName,
-                        fontSize = 11.sp,
+                        shortSortLabel(sortOrder.field),
+                        fontSize = 12.sp,
                         maxLines = 1
                     )
                 },

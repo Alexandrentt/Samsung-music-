@@ -29,15 +29,18 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import com.example.R
 import com.example.data.Song
 
@@ -93,6 +96,37 @@ fun MiniPlayerBar(
             tonalElevation = 6.dp,
             shadowElevation = 8.dp
         ) {
+            Box(modifier = Modifier.fillMaxWidth()) {
+            // Portada translúcida de FONDO (estilo One UI): llena la barra y
+            // da contexto visual sin robar espacio a los botones.
+            Box(modifier = Modifier.matchParentSize()) {
+                if (displaySong?.coverArtUrl != null) {
+                    AsyncImage(
+                        model = ImageRequest.Builder(LocalContext.current)
+                            .data(displaySong.coverArtUrl)
+                            .size(300)
+                            .build(),
+                        contentDescription = null,
+                        modifier = Modifier.matchParentSize(),
+                        contentScale = ContentScale.Crop,
+                        alpha = 0.35f
+                    )
+                    // Velo que garantiza contraste del texto y botones
+                    Box(
+                        modifier = Modifier
+                            .matchParentSize()
+                            .background(
+                                Brush.horizontalGradient(
+                                    colors = listOf(
+                                        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.92f),
+                                        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.78f)
+                                    )
+                                )
+                            )
+                    )
+                }
+            }
+
             Column(modifier = Modifier.fillMaxWidth()) {
                 // Barra de progreso en la parte superior
                 if (currentSong != null) {
@@ -114,31 +148,20 @@ fun MiniPlayerBar(
                         .padding(horizontal = 10.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // Carátula de la canción (limpia, sin badge superpuesto)
+                    // Indicador compacto: nota musical (la portada ya está de fondo)
                     Box(
                         modifier = Modifier
-                            .size(50.dp)
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(MaterialTheme.colorScheme.surface),
+                            .size(40.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.75f)),
                         contentAlignment = Alignment.Center
                     ) {
-                        if (displaySong?.coverArtUrl != null) {
-                            AsyncImage(
-                                model = displaySong.coverArtUrl,
-                                contentDescription = displaySong.title,
-                                modifier = Modifier
-                                    .size(50.dp)
-                                    .clip(RoundedCornerShape(12.dp)),
-                                contentScale = ContentScale.Crop
-                            )
-                        } else {
-                            Icon(
-                                imageVector = Icons.Default.MusicNote,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.size(24.dp)
-                            )
-                        }
+                        Icon(
+                            imageVector = Icons.Default.MusicNote,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(22.dp)
+                        )
                     }
 
                     Spacer(modifier = Modifier.width(12.dp))
@@ -229,6 +252,7 @@ fun MiniPlayerBar(
                         )
                     }
                 }
+            }
             }
         }
     }

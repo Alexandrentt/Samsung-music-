@@ -557,37 +557,56 @@ class SamsungMusicViewModel(application: Application) : AndroidViewModel(applica
                 }
             }
 
-            // FASE 2e: débil cuyo título es la fila fuerte + sufijo basura
-            // ("Milagro K1V9" vs "Milagro"): el sufijo alfanumérico pegado tras
-            // un espacio (5-7 chars sin vocales repetidas típico de hashes) no
-            // forma parte del nombre real. Solo si hay una fila fuerte cuyo título
-            // normalizado es prefijo del débil y el audio coincide.
-            val strongTitles = leftover3.filter { !it.isPlaceholder() }
-                .map { norm(it.title) }.filter { it.length >= 4 }.toSet()
-            val junkSuffix = Regex("^(.+)\\s+[a-z0-9]{4,8}$")
-            val weakWithJunk = leftover3.filter {
-                it.isPlaceholder() && it.id !in consumed
-            }
+            // FASE 2e: débil cuyo título es la fila fuerte + sufijo basura con
+            // código ("Milagro K1V9", "Sunsetz 5-rbSNzU", "fanshop supernova
+            // mZyXw1"). El sufijo (código alfanumérico de 4-8 chars tras un
+            // espacio o guion) no forma parte del nombre real. Estrategia:
+            //   1. Para cada débil calcula su título SIN el sufijo.
+            //   2. Busca una fila fuerte cuyo título normalizado sea IGUAL o
+            //      prefijo del débil ("sunsetz" vs "sunsetz 5 rbsnzu").
+            //   3. Confirma con audio: coincide la duración real, O la débil
+            //      tiene la duración por defecto 180 s (viejos escaneos nunca
+            //      la midieron) y hay un único candidato fuerte.
+            // El sobreviviente hereda la letra (.lrc) de la débil si él no tiene.
+            val strongs = leftover3.filter { !it.isPlaceholder() && it.id !in consumed }
+            val junkSuffix = Regex("[\\s\\-_]+[A-Za-z0-9]{4,8}$")
+            val weakWithJunk = leftover3.filter { it.isPlaceholder() && it.id !in consumed }
             for (weak in weakWithJunk) {
-                val nt = norm(weak.title)
-                val m = junkSuffix.find(weak.title.trim()) ?: continue
-                val base = norm(m.groupValues[1])
-                if (base.length < 4) continue
-                if (base !in strongTitles && base != nt) {
-                    // ¿Existe alguna fuerte cuyo título normalizado sea el prefijo?
-                    val matched = leftover3.any {
-                        !it.isPlaceholder() && (norm(it.title) == base) && sameAudio(it, weak)
+                val raw = weak.title.trim()
+                val m = junkSuffix.find(raw) ?: continue
+                val baseNorm = norm(raw.replace(junkSuffix, ""))
+                if (baseNorm.length < 4) continue
+
+                // Candidatos fuertes: título igual O la débil empieza con el título fuerte
+                val candidates = strongs.filter { st ->
+                    val stn = norm(st.title)
+                    stn == baseNorm || (stn.length >= 4 && raw.lowercase().startsWith(stn))
+                }
+                if (candidates.isEmpty()) continue
+
+                val strongMatch = if (candidates.size == 1) {
+                    candidates.first()
+                } else {
+                    candidates.filter { sameAudio(it, weak) }
+                        .maxByOrNull { songScore(it) } ?: continue
+                }
+
+                val weakDurIsDefault = weak.durationMs == 180000L
+                val durOk = sameAudio(strongMatch, weak) ||
+                        (weakDurIsDefault && candidates.size == 1)
+                if (!durOk) continue
+
+                // El sobreviviente hereda la letra de la débil si no tiene
+                if (strongMatch.lyricsPath.isNullOrBlank() && !weak.lyricsPath.isNullOrBlank()) {
+                    try {
+                        val src = File(weak.lyricsPath!!)
+                        val dstPath = strongMatch.filePath.substringBeforeLast('.') + ".lrc"
+                        if (src.exists()) src.copyTo(File(dstPath), overwrite = true)
+                    } catch (_: Exception) {
                     }
-                    if (!matched) continue
                 }
-                val strongMatch = leftover3.filter {
-                    !it.isPlaceholder() && it.id !in consumed &&
-                            (norm(it.title) == base || norm(it.title) == nt)
-                }.maxByOrNull { songScore(it) } ?: continue
-                if (sameAudio(strongMatch, weak)) {
-                    mergeInto(strongMatch, weak)
-                    consumed.add(weak.id)
-                }
+                mergeInto(strongMatch, weak)
+                consumed.add(weak.id)
             }
 
             var removedRows = 0
