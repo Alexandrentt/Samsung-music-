@@ -14,10 +14,9 @@
         android:src="@drawable/bg_notif_gradient" />
 
     <!-- Dark gradient overlay for text readability -->
-    <View
-        android:layout_width="match_parent"
-        android:layout_height="match_parent"
-        android:background="@drawable/bg_notif_gradient" />
+    <!-- NOTA RemoteViews: no usar <View> genérico ni <Space>; solo vistas de
+         la lista blanca. Un <View> aquí provocaba
+         BadForegroundServiceNotificationException. -->
 
     <!-- Foreground Controls -->
     <LinearLayout
@@ -40,10 +39,11 @@
                 android:contentDescription="Música"
                 android:src="@drawable/ic_notif_play_ring" />
 
-            <View
+            <LinearLayout
                 android:layout_width="0dp"
                 android:layout_height="1dp"
-                android:layout_weight="1" />
+                android:layout_weight="1"
+                android:orientation="horizontal" />
 
             <!-- Pill: Este teléfono -->
             <LinearLayout

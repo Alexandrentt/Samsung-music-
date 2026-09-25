@@ -296,8 +296,11 @@ class MusicPlaybackService : Service() {
             0
         }
 
-        // Expanded RemoteViews matching the user screenshot exactly
-        val remoteViewsExpanded = RemoteViews(packageName, R.layout.notification_media_player_expanded).apply {
+        // RemoteViews construidos con red de seguridad: si el layout trae una
+        // clase no permitida por RemoteViews (p. ej. <View> en Android 14),
+        // safeRemoteViews devuelve null y se publica la notificación básica
+        // en vez de una vista que el sistema rechaza matando el proceso.
+        val remoteViewsExpanded = safeRemoteViews(R.layout.notification_media_player_expanded) {
             setTextViewText(R.id.notif_song_title, title)
             setTextViewText(R.id.notif_song_artist, artist)
             setImageViewResource(R.id.notif_btn_play_pause, playPauseIconRes)
@@ -319,8 +322,8 @@ class MusicPlaybackService : Service() {
             setOnClickPendingIntent(R.id.notif_root, contentPendingIntent)
         }
 
-        // Collapsed RemoteViews
-        val remoteViewsCollapsed = RemoteViews(packageName, R.layout.notification_media_player).apply {
+        // Collapsed RemoteViews (mismas reglas de seguridad)
+        val remoteViewsCollapsed = safeRemoteViews(R.layout.notification_media_player) {
             setTextViewText(R.id.notif_song_title, title)
             setTextViewText(R.id.notif_song_artist, artist)
             setImageViewResource(R.id.notif_btn_play_pause, playPauseIconRes)
@@ -339,28 +342,55 @@ class MusicPlaybackService : Service() {
             setOnClickPendingIntent(R.id.notif_collapsed_root, contentPendingIntent)
         }
 
-        val builder = NotificationCompat.Builder(this, CHANNEL_ID)
+        var builder = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_launcher_foreground)
             .setContentTitle(title)
             .setContentText(artist)
             .setContentIntent(contentPendingIntent)
-            .setCustomContentView(remoteViewsCollapsed)
-            .setCustomBigContentView(remoteViewsExpanded)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setOngoing(isPlaying)
             .setSilent(true)
+        if (remoteViewsExpanded != null && remoteViewsCollapsed != null) {
+            builder = builder
+                .setCustomBigContentView(remoteViewsExpanded)
+                .setCustomContentView(remoteViewsCollapsed)
+        }
 
         // notify() en vez de startForeground() para las actualizaciones de
         // progreso posteriores: reconstruir el foreground cada 2 s (como hacía
         // el ticker) dispara oportunidades de crash innecesarias. startForeground
         // ya se garantizó al entrar en onStartCommand.
+        val notification = builder.build()
         if (isForegroundActive) {
-            notificationManager.notify(NOTIFICATION_ID, builder.build())
+            notificationManager.notify(NOTIFICATION_ID, notification)
         } else {
             isForegroundActive = true
-            startForeground(NOTIFICATION_ID, builder.build())
+            startForeground(NOTIFICATION_ID, notification)
         }
-        isForegroundActive = true
+    }
+
+    /**
+     * Red de seguridad contra BadForegroundServiceNotificationException.
+     *
+     * RemoteViews permite solo un subconjunto de vistas; en Android 14 un
+     * layout con una clase fuera de esa lista (p. ej. <View>) inflaba bien
+     * en el build pero el sistema LANZA al validar la notificación y mata el
+     * proceso (RemoteServiceException que ningún try/catch del servicio ve).
+     *
+     * Aquí inflamos el layout con las MISMAS reglas (RemoteViews.apply)
+     * antes de publicarlo: si falla, devolvemos null y la notificación sale
+     * básica — el usuario sigue reproduciendo música sin crash.
+     */
+    private fun safeRemoteViews(layoutRes: Int, configure: RemoteViews.() -> Unit): RemoteViews? {
+        return try {
+            val rv = RemoteViews(packageName, layoutRes)
+            rv.configure()
+            rv.apply(applicationContext, null) // validación de inflación local
+            rv
+        } catch (e: Exception) {
+            android.util.Log.e("MusicPlaybackService", "RemoteViews inválido (layout=$layoutRes), usando básica", e)
+            null
+        }
     }
 
     companion object {
