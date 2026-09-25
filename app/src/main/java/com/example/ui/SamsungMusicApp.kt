@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -46,6 +47,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.pager.HorizontalPager
@@ -699,7 +701,7 @@ private fun SongsTabContent(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 4.dp),
+                .padding(horizontal = 4.dp, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             IconButton(onClick = onShuffleAll, enabled = songs.isNotEmpty()) {
@@ -713,9 +715,13 @@ private fun SongsTabContent(
             Text(
                 text = "${songs.size} canciones",
                 fontSize = 13.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.weight(1f)
+                modifier = Modifier.weight(1f, fill = false)
             )
+
+            Spacer(modifier = Modifier.weight(0.5f))
 
             // Reorder toggle button
             IconButton(onClick = onToggleReorderingMode) {
@@ -731,7 +737,13 @@ private fun SongsTabContent(
             FilterChip(
                 selected = true,
                 onClick = { showSortMenu = true },
-                label = { Text(sortOrder.field.displayName, fontSize = 12.sp) },
+                label = {
+                    Text(
+                        sortOrder.field.displayName,
+                        fontSize = 11.sp,
+                        maxLines = 1
+                    )
+                },
                 leadingIcon = {
                     Icon(imageVector = Icons.Default.Sort, contentDescription = null, modifier = Modifier.size(16.dp))
                 },
