@@ -15,7 +15,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.DragHandle
-import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.Image
@@ -42,9 +41,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.platform.LocalContext
 import coil.compose.AsyncImage
-import coil.request.ImageRequest
 import com.example.R
 import com.example.data.Song
 
@@ -59,7 +56,6 @@ fun SongItemRow(
     onPlayNext: () -> Unit,
     onAddToPlaylist: () -> Unit,
     onEditCover: () -> Unit = {},
-    onEditInfo: (() -> Unit)? = null,
     onDelete: () -> Unit,
     onLongClick: (() -> Unit)? = null,
     onMoveUp: (() -> Unit)? = null,
@@ -111,11 +107,7 @@ fun SongItemRow(
         }
 
         AsyncImage(
-            model = ImageRequest.Builder(LocalContext.current)
-                .data(song.coverArtUrl ?: R.drawable.ic_launcher_foreground)
-                .size(156) // 52dp * 3xx density: decode pequeño = scroll fluido
-                .crossfade(true)
-                .build(),
+            model = song.coverArtUrl ?: R.drawable.ic_launcher_foreground,
             contentDescription = song.title,
             modifier = Modifier
                 .size(52.dp)
@@ -137,7 +129,7 @@ fun SongItemRow(
 
             val details = buildString {
                 append(song.artist)
-                if (song.hasLyrics) append(" • Letra") else append(" • Sin letra")
+                if (song.hasLyrics) append(" • Letra")
                 if (song.enrichmentScore >= 70) append(" • MB")
             }
             Text(
@@ -194,16 +186,6 @@ fun SongItemRow(
                         onEditCover()
                     }
                 )
-                if (onEditInfo != null) {
-                    DropdownMenuItem(
-                        text = { Text("Editar datos de la canción") },
-                        leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(18.dp)) },
-                        onClick = {
-                            showMenu = false
-                            onEditInfo.invoke()
-                        }
-                    )
-                }
                 if (onMoveUp != null || onMoveDown != null) {
                     DropdownMenuItem(
                         text = { Text("Subir posición") },

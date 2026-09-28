@@ -82,10 +82,27 @@ class MusicaEngineTest {
     }
 
     @Test
-    fun testUrlDetection() {
-        val testUrl = "https://www.youtube.com/watch?v=yG7MPEQm1-w"
-        val (playlistId, videoId) = extraerInfoUrl(testUrl)
-        assertEquals("yG7MPEQm1-w", videoId)
-        assertEquals(null, playlistId)
+    fun testArtistNormalization() {
+        val n1 = com.example.ui.SamsungMusicViewModel.normalizeArtistKey("Bad Bunny")
+        val n2 = com.example.ui.SamsungMusicViewModel.normalizeArtistKey("bad bunny ")
+        val n3 = com.example.ui.SamsungMusicViewModel.normalizeArtistKey("Bád Bunny")
+        val n4 = com.example.ui.SamsungMusicViewModel.normalizeArtistKey("bad  bunny")
+        val n5 = com.example.ui.SamsungMusicViewModel.normalizeArtistKey("BAD BUNNY")
+
+        assertEquals("badbunny", n1)
+        assertEquals(n1, n2)
+        assertEquals(n1, n3)
+        assertEquals(n1, n4)
+        assertEquals(n1, n5)
+    }
+
+    @Test
+    fun testSearchNormalization() {
+        val title = "Corazón Espinado"
+        val query = "corazon"
+        val normalizedTitle = com.example.ui.SamsungMusicViewModel.normalizeForSearch(title)
+        val normalizedQuery = com.example.ui.SamsungMusicViewModel.normalizeForSearch(query)
+
+        assertTrue(normalizedTitle.contains(normalizedQuery))
     }
 }

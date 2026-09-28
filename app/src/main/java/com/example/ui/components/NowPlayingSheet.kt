@@ -71,12 +71,6 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.ArrowDownward
-import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.StartOffset
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.MusicNote
@@ -287,17 +281,12 @@ fun NowPlayingSheet(
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
                                         if (isCurrent) {
-                                            // Animación de barras mientras suena esta fila
-                                            if (isPlaying) {
-                                                InfiniteRepeatableBars()
-                                            } else {
-                                                Icon(
-                                                    imageVector = Icons.Default.GraphicEq,
-                                                    contentDescription = "Reproduciendo ahora",
-                                                    tint = MaterialTheme.colorScheme.primary,
-                                                    modifier = Modifier.size(20.dp).padding(end = 4.dp)
-                                                )
-                                            }
+                                            Icon(
+                                                imageVector = Icons.Default.GraphicEq,
+                                                contentDescription = "Reproduciendo ahora",
+                                                tint = MaterialTheme.colorScheme.primary,
+                                                modifier = Modifier.size(20.dp).padding(end = 4.dp)
+                                            )
                                         } else {
                                             Text(
                                                 text = "${index + 1}",
@@ -705,36 +694,4 @@ private fun formatMs(ms: Long): String {
     val minutes = totalSeconds / 60
     val seconds = totalSeconds % 60
     return String.format("%02d:%02d", minutes, seconds)
-}
-
-/** Tres barras animadas (ecualizador) que indican la canción sonando en la cola. */
-@Composable
-private fun InfiniteRepeatableBars() {
-    val transition = rememberInfiniteTransition(label = "eq")
-    Box(modifier = Modifier.width(20.dp), contentAlignment = Alignment.Center) {
-        Row(verticalAlignment = Alignment.Bottom) {
-            repeat(3) { i ->
-                val h by transition.animateFloat(
-                    initialValue = 5.dp.value,
-                    targetValue = 16.dp.value,
-                    animationSpec = infiniteRepeatable(
-                        animation = tween(360, easing = LinearEasing),
-                        repeatMode = androidx.compose.animation.core.RepeatMode.Reverse,
-                        initialStartOffset = StartOffset(i * 120)
-                    ),
-                    label = "bar$i"
-                )
-                Box(
-                    modifier = Modifier
-                        .padding(horizontal = 1.dp)
-                        .width(3.dp)
-                        .height(h.dp)
-                        .background(
-                            MaterialTheme.colorScheme.primary,
-                            RoundedCornerShape(2.dp)
-                        )
-                )
-            }
-        }
-    }
 }

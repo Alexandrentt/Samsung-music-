@@ -1,6 +1,6 @@
 package com.example.ui
 
-import androidx.compose.foundation.background
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -8,18 +8,13 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
@@ -34,7 +29,6 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -47,9 +41,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.pager.HorizontalPager
@@ -57,15 +49,11 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material.icons.filled.SwapVert
 import androidx.compose.material.icons.filled.VerticalAlignBottom
 import androidx.compose.material.icons.filled.VerticalAlignTop
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.launch
-import android.content.Intent
-import android.widget.Toast
 import com.example.data.Song
-import com.example.player.CrashHandler
+import com.example.ui.components.ArtistsTabContent
 import com.example.ui.components.CoverArtEditorDialog
 import com.example.ui.components.DownloadTabContent
 import com.example.ui.components.MiniPlayerBar
@@ -111,12 +99,30 @@ fun SamsungMusicApp(viewModel: SamsungMusicViewModel) {
     val isSearchingYouTube by viewModel.isSearchingYouTube.collectAsState()
     val youtubeSearchResults by viewModel.youtubeSearchResults.collectAsState()
     val localSearchResults by viewModel.localSearchResults.collectAsState()
+    val artistGroups by viewModel.artistGroups.collectAsState()
+    val selectedArtistForDetail by viewModel.selectedArtistForDetail.collectAsState()
 
-    // Diagnóstico: registro de errores (crash log) y estado del reescaneo
-    var showCrashLogDialog by remember { mutableStateOf(false) }
-    var crashLogContent by remember { mutableStateOf<String?>(null) }
-    var isRescanning by remember { mutableStateOf(false) }
-    var rescanResult by remember { mutableStateOf<String?>(null) }
+    // Manejo del botón Atrás del sistema para que no cierre la app al estar en búsqueda, reproductor, artista o playlist
+    BackHandler(enabled = isSearchActive || searchQuery.isNotEmpty()) {
+        viewModel.toggleSearchActive(false)
+        viewModel.setSearchQuery("")
+    }
+
+    BackHandler(enabled = showNowPlaying) {
+        viewModel.closeNowPlayingSheet()
+    }
+
+    BackHandler(enabled = selectedArtistForDetail != null) {
+        viewModel.selectArtistForDetail(null)
+    }
+
+    BackHandler(enabled = selectedPlaylistId != null) {
+        viewModel.selectPlaylist(null)
+    }
+
+    BackHandler(enabled = selectedTab == SamsungTab.DOWNLOAD && youtubeSearchQuery.isNotEmpty()) {
+        viewModel.setYouTubeSearchQuery("")
+    }
 
     val currentSong by viewModel.playerManager.currentSong.collectAsState()
     val isPlaying by viewModel.playerManager.isPlaying.collectAsState()
@@ -131,24 +137,6 @@ fun SamsungMusicApp(viewModel: SamsungMusicViewModel) {
     // Estado para personalización del orden de canciones al mantener presionada una canción
     var songToReorder by remember { mutableStateOf<Song?>(null) }
     var isQuickReorderingMode by remember { mutableStateOf(false) }
-
-    // Editor de datos (título/artista/álbum) y selector de carpeta de música
-    var songToEditInfo by remember { mutableStateOf<Song?>(null) }
-    var showFolderPickerHelp by remember { mutableStateOf(false) }
-    val folderPicker = rememberLauncherForActivityResult(
-        ActivityResultContracts.OpenDocumentTree()
-    ) { uri ->
-        if (uri != null) {
-            try {
-                context.contentResolver.takePersistableUriPermission(
-                    uri,
-                    Intent.FLAG_GRANT_READ_URI_PERMISSION
-                )
-            } catch (_: Exception) {
-            }
-            viewModel.setMusicFolderUri(uri.toString())
-        }
-    }
 
     // Pager para deslizar entre pestañas con el táctil
     val tabs = remember { SamsungTab.values() }
@@ -185,18 +173,7 @@ fun SamsungMusicApp(viewModel: SamsungMusicViewModel) {
                 onShowStats = { viewModel.showStatistics() },
                 onCleanFolder = { viewModel.cleanMusicFolder() },
                 onEnrichAll = { viewModel.enrichAllSongs(force = true) },
-                onExportCsv = { viewModel.exportToCsv(context) },
-                onShowCrashLog = { showCrashLogDialog = true },
-                onRescanSongs = {
-                    if (!isRescanning) {
-                        isRescanning = true
-                        viewModel.rescanSongs { summary ->
-                            isRescanning = false
-                            rescanResult = summary
-                        }
-                    }
-                },
-                onPickMusicFolder = { showFolderPickerHelp = true }
+                onExportCsv = { viewModel.exportToCsv(context) }
             )
         },
         bottomBar = {
@@ -279,7 +256,6 @@ fun SamsungMusicApp(viewModel: SamsungMusicViewModel) {
                             onPlayNext = { viewModel.playNext(listOf(it)) },
                             onAddToPlaylist = { viewModel.openAddToPlaylistDialog(it) },
                             onEditCover = { viewModel.openCoverArtEditor(it) },
-                            onEditInfo = { songToEditInfo = it },
                             onDeleteSong = { viewModel.deleteSong(it) },
                             onSongLongClick = { songToReorder = it },
                             onMoveSong = { id, offset -> viewModel.moveSong(id, offset) },
@@ -304,7 +280,6 @@ fun SamsungMusicApp(viewModel: SamsungMusicViewModel) {
                             onPlayNext = { viewModel.playNext(listOf(it)) },
                             onAddToPlaylist = { viewModel.openAddToPlaylistDialog(it) },
                             onEditCover = { viewModel.openCoverArtEditor(it) },
-                            onEditInfo = { songToEditInfo = it },
                             onDeleteSong = { viewModel.deleteSong(it) },
                             onSongLongClick = { songToReorder = it },
                             onMoveSong = { id, offset -> viewModel.moveSong(id, offset) },
@@ -329,6 +304,23 @@ fun SamsungMusicApp(viewModel: SamsungMusicViewModel) {
                             onDeleteSong = { viewModel.deleteSong(it) },
                             onEditCover = { viewModel.openCoverArtEditor(it) },
                             onPlayNext = { viewModel.playNext(it) }
+                        )
+                    }
+
+                    SamsungTab.ARTISTS -> {
+                        ArtistsTabContent(
+                            artistGroups = artistGroups,
+                            selectedArtist = selectedArtistForDetail,
+                            currentSong = currentSong,
+                            isPlaying = isPlaying,
+                            onSelectArtist = { viewModel.selectArtistForDetail(it) },
+                            onPlayArtist = { artist, shuffle -> viewModel.playArtistSongs(artist, shuffle) },
+                            onPlaySong = { song, queue -> viewModel.playSong(song, queue) },
+                            onToggleFavorite = { viewModel.toggleFavorite(it) },
+                            onPlayNext = { viewModel.playNext(listOf(it)) },
+                            onAddToPlaylist = { viewModel.openAddToPlaylistDialog(it) },
+                            onEditCover = { viewModel.openCoverArtEditor(it) },
+                            onDeleteSong = { viewModel.deleteSong(it) }
                         )
                     }
 
@@ -573,186 +565,6 @@ fun SamsungMusicApp(viewModel: SamsungMusicViewModel) {
         StatsDialog(stats = stats, onDismiss = { viewModel.dismissStatsDialog() })
     }
 
-    // Diálogo: Registro de errores (crash log)
-    if (showCrashLogDialog) {
-        crashLogContent = remember(showCrashLogDialog) { CrashHandler.readLog(context) }
-        AlertDialog(
-            onDismissRequest = { showCrashLogDialog = false },
-            title = { Text("Registro de errores", fontWeight = FontWeight.Bold, fontSize = 18.sp) },
-            text = {
-                Column {
-                    val content = crashLogContent
-                    if (content == null) {
-                        Text(
-                            "No hay errores registrados. \uD83C\uDF89",
-                            fontSize = 14.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    } else {
-                        Text(
-                            "Últimos errores detectados (stack traces):",
-                            fontSize = 13.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(bottom = 8.dp)
-                        )
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .heightIn(max = 320.dp)
-                                .verticalScroll(rememberScrollState())
-                                .background(
-                                    MaterialTheme.colorScheme.surfaceVariant,
-                                    MaterialTheme.shapes.small
-                                )
-                                .padding(10.dp)
-                        ) {
-                            Text(
-                                text = content,
-                                fontSize = 11.sp,
-                                lineHeight = 15.sp,
-                                fontFamily = FontFamily.Monospace,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-                }
-            },
-            confirmButton = {
-                if (crashLogContent != null) {
-                    TextButton(onClick = {
-                        try {
-                            CrashHandler.shareIntent(context)?.let { intent ->
-                                context.startActivity(Intent.createChooser(intent, "Compartir registro de errores"))
-                            }
-                        } catch (_: Exception) {
-                        }
-                    }) {
-                        Text("Compartir")
-                    }
-                }
-            },
-            dismissButton = {
-                Row {
-                    if (crashLogContent != null) {
-                        TextButton(onClick = {
-                            CrashHandler.clearLogFile(context)
-                            crashLogContent = null
-                        }) {
-                            Text("Borrar", color = MaterialTheme.colorScheme.error)
-                        }
-                    }
-                    TextButton(onClick = { showCrashLogDialog = false }) {
-                        Text("Cerrar")
-                    }
-                }
-            }
-        )
-    }
-
-    // Toast de resultado del reescaneo
-    rescanResult?.let { summary ->
-        LaunchedEffect(summary) {
-            try {
-                android.widget.Toast.makeText(context, summary, Toast.LENGTH_LONG).show()
-            } catch (_: Exception) {
-            }
-            rescanResult = null
-        }
-    }
-
-    // Diálogo: editar datos de la canción (título/artista/álbum)
-    songToEditInfo?.let { song ->
-        var editTitle by remember(song.id) { mutableStateOf(song.title) }
-        var editArtist by remember(song.id) { mutableStateOf(song.artist) }
-        var editAlbum by remember(song.id) { mutableStateOf(song.album) }
-        AlertDialog(
-            onDismissRequest = { songToEditInfo = null },
-            title = { Text("Editar datos", fontWeight = FontWeight.Bold, fontSize = 18.sp) },
-            text = {
-                Column {
-                    OutlinedTextField(
-                        value = editTitle,
-                        onValueChange = { editTitle = it },
-                        label = { Text("Título") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    OutlinedTextField(
-                        value = editArtist,
-                        onValueChange = { editArtist = it },
-                        label = { Text("Artista") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    OutlinedTextField(
-                        value = editAlbum,
-                        onValueChange = { editAlbum = it },
-                        label = { Text("Álbum") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    viewModel.updateSongInfo(song.id, editTitle, editArtist, editAlbum)
-                    songToEditInfo = null
-                }) { Text("Guardar") }
-            },
-            dismissButton = {
-                TextButton(onClick = { songToEditInfo = null }) { Text("Cancelar") }
-            }
-        )
-    }
-
-    // Diálogo: ayuda + selector de carpeta de música (estilo Samsung Music)
-    if (showFolderPickerHelp) {
-        AlertDialog(
-            onDismissRequest = { showFolderPickerHelp = false },
-            title = { Text("Carpeta de música", fontWeight = FontWeight.Bold, fontSize = 18.sp) },
-            text = {
-                Column {
-                    Text(
-                        "Elige de qué carpeta del teléfono se lee tu música. " +
-                                "Se escanean esa carpeta y sus subcarpetas (hasta 2 niveles): " +
-                                "Música, Descargas, WhatsApp o la que prefieras.",
-                        fontSize = 14.sp
-                    )
-                    Spacer(modifier = Modifier.height(10.dp))
-                    val current = viewModel.userFolderUri()
-                    Text(
-                        if (current != null) "Actual: carpeta personalizada (puedes quitarla)."
-                        else "Actual: /Music/SamsungMusic (descargas de la app).",
-                        fontSize = 13.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    showFolderPickerHelp = false
-                    try {
-                        folderPicker.launch(null)
-                    } catch (_: Exception) {
-                    }
-                }) { Text("Elegir carpeta…") }
-            },
-            dismissButton = {
-                Row {
-                    if (viewModel.userFolderUri() != null) {
-                        TextButton(onClick = {
-                            viewModel.clearMusicFolder()
-                            showFolderPickerHelp = false
-                        }) { Text("Quitar", color = MaterialTheme.colorScheme.error) }
-                    }
-                    TextButton(onClick = { showFolderPickerHelp = false }) { Text("Cerrar") }
-                }
-            }
-        )
-    }
-
     // Add To Playlist Dialog
     songToAddToPlaylist?.let { song ->
         val playlists = playlistsWithSongs.map { it.playlist }
@@ -789,17 +601,6 @@ fun SamsungMusicApp(viewModel: SamsungMusicViewModel) {
     }
 }
 
-/** Etiqueta corta para el chip de orden ("Fecha de adición" no cabe). */
-private fun shortSortLabel(field: SongSortField): String = when (field) {
-    SongSortField.CUSTOM -> "Orden"
-    SongSortField.TITLE -> "Título"
-    SongSortField.ARTIST -> "Artista"
-    SongSortField.ALBUM -> "Álbum"
-    SongSortField.DATE_ADDED -> "Fecha"
-    SongSortField.DURATION -> "Duración"
-    SongSortField.PLAY_COUNT -> "Reprod."
-}
-
 @Composable
 private fun SongsTabContent(
     songs: List<Song>,
@@ -816,7 +617,6 @@ private fun SongsTabContent(
     onPlayNext: (Song) -> Unit,
     onAddToPlaylist: (Song) -> Unit,
     onEditCover: (Song) -> Unit = {},
-    onEditInfo: ((Song) -> Unit)? = null,
     onDeleteSong: (Song) -> Unit,
     onSongLongClick: (Song) -> Unit = {},
     onMoveSong: (songId: String, offset: Int) -> Unit = { _, _ -> },
@@ -831,7 +631,7 @@ private fun SongsTabContent(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 4.dp, vertical = 4.dp),
+                .padding(horizontal = 12.dp, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             IconButton(onClick = onShuffleAll, enabled = songs.isNotEmpty()) {
@@ -845,13 +645,9 @@ private fun SongsTabContent(
             Text(
                 text = "${songs.size} canciones",
                 fontSize = 13.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.weight(1f, fill = false)
+                modifier = Modifier.weight(1f)
             )
-
-            Spacer(modifier = Modifier.weight(1f))
 
             // Reorder toggle button
             IconButton(onClick = onToggleReorderingMode) {
@@ -863,17 +659,11 @@ private fun SongsTabContent(
                 )
             }
 
-            // Sort field chip with menu (etiqueta corta: "Fecha" no "Fecha de adición")
+            // Sort field chip with menu (field + quick direction toggle inside)
             FilterChip(
                 selected = true,
                 onClick = { showSortMenu = true },
-                label = {
-                    Text(
-                        shortSortLabel(sortOrder.field),
-                        fontSize = 12.sp,
-                        maxLines = 1
-                    )
-                },
+                label = { Text(sortOrder.field.displayName, fontSize = 12.sp) },
                 leadingIcon = {
                     Icon(imageVector = Icons.Default.Sort, contentDescription = null, modifier = Modifier.size(16.dp))
                 },
@@ -970,7 +760,6 @@ private fun SongsTabContent(
                         onPlayNext = { onPlayNext(song) },
                         onAddToPlaylist = { onAddToPlaylist(song) },
                         onEditCover = { onEditCover(song) },
-                        onEditInfo = onEditInfo?.let { fn -> { fn(song) } },
                         onDelete = { onDeleteSong(song) },
                         onLongClick = { onSongLongClick(song) },
                         onMoveUp = { onMoveSong(song.id, -1) },

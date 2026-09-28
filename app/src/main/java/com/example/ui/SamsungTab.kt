@@ -4,5 +4,6 @@ enum class SamsungTab(val title: String) {
     FAVORITES("Favoritos"),
     PLAYLISTS("Listas"),
     TRACKS("Canciones"),
+    ARTISTS("Artistas"),
     DOWNLOAD("Descargas")
 }

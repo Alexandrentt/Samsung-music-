@@ -31,150 +31,96 @@ class MusicPlaybackService : Service() {
     private var lastLoadedArtUrl: String? = null
     private var cachedCoverBitmap: Bitmap? = null
     private var isForegroundActive = false
-    private lateinit var notificationManager: NotificationManager
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
         super.onCreate()
-        notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         createNotificationChannel()
     }
 
     override fun onDestroy() {
         super.onDestroy()
         serviceScope.cancel()
-        isForegroundActive = false
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        // El contrato de startForegroundService exige llamar a startForeground()
-        // SIEMPRE y de inmediato; de lo contrario Android mata el proceso
-        // (crash "Context.startForegroundService() did not then call
-        // Service.startForeground()" — causa típica de que la app se cierre
-        // sola en cuanto reproduce). Renderizamos la notificación básica aquí y
-        // el contenido completo va dentro de try/catch para que cualquier
-        // error de RemoteViews no tire la app entera.
-        try {
-            renderNotification(
-                title = "Música",
-                artist = "Reproduciendo…",
-                isPlaying = false,
-                artBitmap = cachedCoverBitmap,
-                isShuffle = false,
-                isFavorite = false,
-                positionMs = 0L,
-                durationMs = 0L
-            )
-        } catch (e: Exception) {
-            android.util.Log.e("MusicPlaybackService", "No se pudo renderizar la notificación base", e)
-            try {
-                startForeground(NOTIFICATION_ID, basicNotification("Música"))
-            } catch (e2: Exception) {
-                android.util.Log.e("MusicPlaybackService", "No se pudo iniciar el foreground", e2)
-                stopSelf()
-                return START_NOT_STICKY
-            }
-        }
-
         if (intent == null) return START_STICKY
 
-        try {
-            when (intent.action) {
-                ACTION_START -> {
-                    val title = intent.getStringExtra(EXTRA_TITLE) ?: "Música"
-                    val artist = intent.getStringExtra(EXTRA_ARTIST) ?: "Reproduciendo"
-                    val isPlaying = intent.getBooleanExtra(EXTRA_IS_PLAYING, true)
-                    val artUrl = intent.getStringExtra(EXTRA_ART_URL)
-                    val isShuffle = intent.getBooleanExtra(EXTRA_IS_SHUFFLE, false)
-                    val isFavorite = intent.getBooleanExtra(EXTRA_IS_FAVORITE, false)
-                    val positionMs = intent.getLongExtra(EXTRA_POSITION_MS, 0L)
-                    val durationMs = intent.getLongExtra(EXTRA_DURATION_MS, 0L)
+        when (intent.action) {
+            ACTION_START -> {
+                val title = intent.getStringExtra(EXTRA_TITLE) ?: "Samsung Music"
+                val artist = intent.getStringExtra(EXTRA_ARTIST) ?: "Reproduciendo"
+                val isPlaying = intent.getBooleanExtra(EXTRA_IS_PLAYING, true)
+                val artUrl = intent.getStringExtra(EXTRA_ART_URL)
+                val isShuffle = intent.getBooleanExtra(EXTRA_IS_SHUFFLE, false)
+                val isFavorite = intent.getBooleanExtra(EXTRA_IS_FAVORITE, false)
+                val positionMs = intent.getLongExtra(EXTRA_POSITION_MS, 0L)
+                val durationMs = intent.getLongExtra(EXTRA_DURATION_MS, 0L)
 
-                    updateNotificationWithArtwork(
-                        title = title,
-                        artist = artist,
-                        isPlaying = isPlaying,
-                        artUrl = artUrl,
-                        isShuffle = isShuffle,
-                        isFavorite = isFavorite,
-                        positionMs = positionMs,
-                        durationMs = durationMs
-                    )
-                    MusicAppWidgetProvider.updateAllWidgets(this, title, artist, isPlaying)
-                }
-                ACTION_PAUSE -> {
-                    AudioPlayerManager.getInstance()?.pause()
-                    val title = intent.getStringExtra(EXTRA_TITLE) ?: "Música"
-                    val artist = intent.getStringExtra(EXTRA_ARTIST) ?: "En pausa"
-                    updateNotificationWithArtwork(
-                        title = title,
-                        artist = artist,
-                        isPlaying = false,
-                        artUrl = null,
-                        isShuffle = false,
-                        isFavorite = false,
-                        positionMs = 0L,
-                        durationMs = 0L
-                    )
-                    MusicAppWidgetProvider.updateAllWidgets(this, title, artist, false)
-                }
-                ACTION_STOP -> {
-                    AudioPlayerManager.getInstance()?.pause()
-                    MusicAppWidgetProvider.updateAllWidgets(this, "Música", "En pausa", false)
-                    stopForeground(STOP_FOREGROUND_REMOVE)
-                    stopSelf()
-                }
-                ACTION_TOGGLE -> {
-                    AudioPlayerManager.getInstance()?.togglePlayPause()
-                }
-                ACTION_PREV -> {
-                    AudioPlayerManager.getInstance()?.skipToPrevious()
-                }
-                ACTION_NEXT -> {
-                    AudioPlayerManager.getInstance()?.skipToNext()
-                }
-                ACTION_SHUFFLE -> {
-                    AudioPlayerManager.getInstance()?.toggleShuffle()
-                }
-                ACTION_FAVORITE -> {
-                    AudioPlayerManager.getInstance()?.toggleFavoriteCurrentSong()
-                }
+                updateNotificationWithArtwork(
+                    title = title,
+                    artist = artist,
+                    isPlaying = isPlaying,
+                    artUrl = artUrl,
+                    isShuffle = isShuffle,
+                    isFavorite = isFavorite,
+                    positionMs = positionMs,
+                    durationMs = durationMs
+                )
+                MusicAppWidgetProvider.updateAllWidgets(this, title, artist, isPlaying)
             }
-        } catch (e: Exception) {
-            // Ninguna acción del servicio debe poder tumbar el proceso.
-            android.util.Log.e("MusicPlaybackService", "Error procesando acción ${intent.action}", e)
+            ACTION_PAUSE -> {
+                AudioPlayerManager.getInstance()?.pause()
+                val title = intent.getStringExtra(EXTRA_TITLE) ?: "Samsung Music"
+                val artist = intent.getStringExtra(EXTRA_ARTIST) ?: "En pausa"
+                updateNotificationWithArtwork(
+                    title = title,
+                    artist = artist,
+                    isPlaying = false,
+                    artUrl = null,
+                    isShuffle = false,
+                    isFavorite = false,
+                    positionMs = 0L,
+                    durationMs = 0L
+                )
+                MusicAppWidgetProvider.updateAllWidgets(this, title, artist, false)
+            }
+            ACTION_STOP -> {
+                AudioPlayerManager.getInstance()?.pause()
+                MusicAppWidgetProvider.updateAllWidgets(this, "Samsung Music", "En pausa", false)
+                isForegroundActive = false
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopSelf()
+            }
+            ACTION_TOGGLE -> {
+                AudioPlayerManager.getInstance()?.togglePlayPause()
+            }
+            ACTION_PREV -> {
+                AudioPlayerManager.getInstance()?.skipToPrevious()
+            }
+            ACTION_NEXT -> {
+                AudioPlayerManager.getInstance()?.skipToNext()
+            }
+            ACTION_SHUFFLE -> {
+                AudioPlayerManager.getInstance()?.toggleShuffle()
+            }
+            ACTION_FAVORITE -> {
+                AudioPlayerManager.getInstance()?.toggleFavoriteCurrentSong()
+            }
         }
 
         return START_STICKY
-    }
-
-    /** Notificación mínima de respaldo sin RemoteViews personalizadas. */
-    private fun basicNotification(title: String): Notification {
-        val openAppIntent = Intent(this, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
-        }
-        val contentPendingIntent = PendingIntent.getActivity(
-            this, 0, openAppIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-        return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_launcher_foreground)
-            .setContentTitle(title)
-            .setContentText("Reproduciendo…")
-            .setContentIntent(contentPendingIntent)
-            .setSilent(true)
-            .setOngoing(true)
-            .build()
     }
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
                 CHANNEL_ID,
-                "Reproducción de Música",
+                "Reproducción de Música Samsung",
                 NotificationManager.IMPORTANCE_LOW
             ).apply {
-                description = "Miniplayer de reproducción multimedia"
+                description = "Miniplayer de reproducción multimedia Samsung One UI"
                 setShowBadge(false)
                 lockscreenVisibility = Notification.VISIBILITY_PUBLIC
             }
@@ -194,18 +140,7 @@ class MusicPlaybackService : Service() {
         durationMs: Long
     ) {
         // Render immediate notification with current cached artwork
-        try {
-            renderNotification(title, artist, isPlaying, cachedCoverBitmap, isShuffle, isFavorite, positionMs, durationMs)
-        } catch (e: Exception) {
-            // RemoteViews puede fallar en algunas capas (p. ej. One UI);
-            // usamos la notificación básica para no crashear el proceso.
-            android.util.Log.e("MusicPlaybackService", "RemoteViews falló, usando notificación básica", e)
-            try {
-                startForeground(NOTIFICATION_ID, basicNotification(title))
-            } catch (e2: Exception) {
-                android.util.Log.e("MusicPlaybackService", "Foreground básico también falló", e2)
-            }
-        }
+        renderNotification(title, artist, isPlaying, cachedCoverBitmap, isShuffle, isFavorite, positionMs, durationMs)
 
         // If artUrl changed, fetch fresh bitmap in background
         if (!artUrl.isNullOrBlank() && artUrl != lastLoadedArtUrl) {
@@ -214,11 +149,7 @@ class MusicPlaybackService : Service() {
                 val bitmap = loadCoverBitmap(artUrl)
                 if (bitmap != null) {
                     cachedCoverBitmap = bitmap
-                    try {
-                        renderNotification(title, artist, isPlaying, bitmap, isShuffle, isFavorite, positionMs, durationMs)
-                    } catch (e: Exception) {
-                        android.util.Log.e("MusicPlaybackService", "Render con portada falló", e)
-                    }
+                    renderNotification(title, artist, isPlaying, bitmap, isShuffle, isFavorite, positionMs, durationMs)
                 }
             }
         }
@@ -230,7 +161,7 @@ class MusicPlaybackService : Service() {
             val request = ImageRequest.Builder(this@MusicPlaybackService)
                 .data(url)
                 .allowHardware(false) // RemoteViews requires software Bitmap
-                .size(600, 600) // portada cuadrada para la notificación
+                .size(240, 150) // Tamaño optimizado para evitar saturar el buffer de Binder IPC (TransactionTooLargeException)
                 .build()
             val result = imageLoader.execute(request)
             (result.drawable as? BitmapDrawable)?.bitmap
@@ -296,11 +227,8 @@ class MusicPlaybackService : Service() {
             0
         }
 
-        // RemoteViews construidos con red de seguridad: si el layout trae una
-        // clase no permitida por RemoteViews (p. ej. <View> en Android 14),
-        // safeRemoteViews devuelve null y se publica la notificación básica
-        // en vez de una vista que el sistema rechaza matando el proceso.
-        val remoteViewsExpanded = safeRemoteViews(R.layout.notification_media_player_expanded) {
+        // Expanded RemoteViews matching the user screenshot exactly
+        val remoteViewsExpanded = RemoteViews(packageName, R.layout.notification_media_player_expanded).apply {
             setTextViewText(R.id.notif_song_title, title)
             setTextViewText(R.id.notif_song_artist, artist)
             setImageViewResource(R.id.notif_btn_play_pause, playPauseIconRes)
@@ -308,9 +236,9 @@ class MusicPlaybackService : Service() {
             setProgressBar(R.id.notif_progress_bar, maxProgress, currentProgress, false)
 
             if (artBitmap != null) {
-                setImageViewBitmap(R.id.notif_cover, artBitmap)
+                setImageViewBitmap(R.id.notif_bg_art, artBitmap)
             } else {
-                setImageViewResource(R.id.notif_cover, R.drawable.bg_notif_gradient)
+                setImageViewResource(R.id.notif_bg_art, R.drawable.bg_notif_gradient)
             }
 
             setOnClickPendingIntent(R.id.notif_btn_play_pause, togglePendingIntent)
@@ -322,17 +250,17 @@ class MusicPlaybackService : Service() {
             setOnClickPendingIntent(R.id.notif_root, contentPendingIntent)
         }
 
-        // Collapsed RemoteViews (mismas reglas de seguridad)
-        val remoteViewsCollapsed = safeRemoteViews(R.layout.notification_media_player) {
+        // Collapsed RemoteViews
+        val remoteViewsCollapsed = RemoteViews(packageName, R.layout.notification_media_player).apply {
             setTextViewText(R.id.notif_song_title, title)
             setTextViewText(R.id.notif_song_artist, artist)
             setImageViewResource(R.id.notif_btn_play_pause, playPauseIconRes)
             setProgressBar(R.id.notif_progress_bar, maxProgress, currentProgress, false)
 
             if (artBitmap != null) {
-                setImageViewBitmap(R.id.notif_cover, artBitmap)
+                setImageViewBitmap(R.id.notif_bg_art, artBitmap)
             } else {
-                setImageViewResource(R.id.notif_cover, R.drawable.bg_notif_gradient)
+                setImageViewResource(R.id.notif_bg_art, R.drawable.bg_notif_gradient)
             }
 
             setOnClickPendingIntent(R.id.notif_btn_play_pause, togglePendingIntent)
@@ -342,54 +270,66 @@ class MusicPlaybackService : Service() {
             setOnClickPendingIntent(R.id.notif_collapsed_root, contentPendingIntent)
         }
 
-        var builder = NotificationCompat.Builder(this, CHANNEL_ID)
+        val builder = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_launcher_foreground)
             .setContentTitle(title)
             .setContentText(artist)
             .setContentIntent(contentPendingIntent)
+            .setCustomContentView(remoteViewsCollapsed)
+            .setCustomBigContentView(remoteViewsExpanded)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setOngoing(isPlaying)
             .setSilent(true)
-        if (remoteViewsExpanded != null && remoteViewsCollapsed != null) {
-            builder = builder
-                .setCustomBigContentView(remoteViewsExpanded)
-                .setCustomContentView(remoteViewsCollapsed)
-        }
 
-        // notify() en vez de startForeground() para las actualizaciones de
-        // progreso posteriores: reconstruir el foreground cada 2 s (como hacía
-        // el ticker) dispara oportunidades de crash innecesarias. startForeground
-        // ya se garantizó al entrar en onStartCommand.
         val notification = builder.build()
-        if (isForegroundActive) {
-            notificationManager.notify(NOTIFICATION_ID, notification)
-        } else {
-            isForegroundActive = true
-            startForeground(NOTIFICATION_ID, notification)
-        }
-    }
+        val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
 
-    /**
-     * Red de seguridad contra BadForegroundServiceNotificationException.
-     *
-     * RemoteViews permite solo un subconjunto de vistas; en Android 14 un
-     * layout con una clase fuera de esa lista (p. ej. <View>) inflaba bien
-     * en el build pero el sistema LANZA al validar la notificación y mata el
-     * proceso (RemoteServiceException que ningún try/catch del servicio ve).
-     *
-     * Aquí inflamos el layout con las MISMAS reglas (RemoteViews.apply)
-     * antes de publicarlo: si falla, devolvemos null y la notificación sale
-     * básica — el usuario sigue reproduciendo música sin crash.
-     */
-    private fun safeRemoteViews(layoutRes: Int, configure: RemoteViews.() -> Unit): RemoteViews? {
-        return try {
-            val rv = RemoteViews(packageName, layoutRes)
-            rv.configure()
-            rv.apply(applicationContext, null) // validación de inflación local
-            rv
-        } catch (e: Exception) {
-            android.util.Log.e("MusicPlaybackService", "RemoteViews inválido (layout=$layoutRes), usando básica", e)
-            null
+        try {
+            if (!isForegroundActive) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    startForeground(
+                        NOTIFICATION_ID,
+                        notification,
+                        android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
+                    )
+                } else {
+                    startForeground(NOTIFICATION_ID, notification)
+                }
+                isForegroundActive = true
+            } else {
+                notificationManager?.notify(NOTIFICATION_ID, notification)
+            }
+        } catch (e: Throwable) {
+            e.printStackTrace()
+            // Respaldo inmediato sin RemoteViews si el sistema rechaza la vista personalizada
+            try {
+                val fallbackBuilder = NotificationCompat.Builder(this, CHANNEL_ID)
+                    .setSmallIcon(R.drawable.ic_launcher_foreground)
+                    .setContentTitle(title)
+                    .setContentText(artist)
+                    .setContentIntent(contentPendingIntent)
+                    .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                    .setOngoing(isPlaying)
+                    .setSilent(true)
+
+                val fallbackNotification = fallbackBuilder.build()
+                if (!isForegroundActive) {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        startForeground(
+                            NOTIFICATION_ID,
+                            fallbackNotification,
+                            android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
+                        )
+                    } else {
+                        startForeground(NOTIFICATION_ID, fallbackNotification)
+                    }
+                    isForegroundActive = true
+                } else {
+                    notificationManager?.notify(NOTIFICATION_ID, fallbackNotification)
+                }
+            } catch (ex: Throwable) {
+                ex.printStackTrace()
+            }
         }
     }
 

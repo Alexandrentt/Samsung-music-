@@ -31,51 +31,66 @@ jobs:
             gradle wrapper --gradle-version 9.3.1 --no-daemon
           fi
 
-      - name: Build debug APK
-        run: gradle :app:assembleDebug --no-daemon
+      - name: Build APK (Release & Debug)
+        run: |
+          chmod +x gradlew 2>/dev/null || true
+          if [ -f gradlew ]; then
+            ./gradlew :app:assembleRelease :app:assembleDebug --no-daemon
+          else
+            gradle :app:assembleRelease :app:assembleDebug --no-daemon
+          fi
 
-      # Los pasos de publicación solo corren en main (los PR solo validan el build).
+      # Los pasos de publicación corren en main, master o workflow_dispatch
       - name: Copy APK to repository root
-        if: github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || github.event_name == 'workflow_dispatch'
         run: |
           mkdir -p apk
-          cp app/build/outputs/apk/debug/app-debug.apk samsung-music.apk
-          ls -la samsung-music.apk
+          if [ -f app/build/outputs/apk/release/app-release.apk ]; then
+            cp app/build/outputs/apk/release/app-release.apk samsung-music-release.apk
+            cp app/build/outputs/apk/release/app-release.apk samsung-music.apk
+          else
+            cp app/build/outputs/apk/debug/app-debug.apk samsung-music.apk
+          fi
+          ls -la samsung-music*.apk
 
       - name: Commit APK to repository root
-        if: github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || github.event_name == 'workflow_dispatch'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add samsung-music.apk
+          git add samsung-music*.apk
           if git diff --cached --quiet; then
             echo "APK sin cambios, no hay nada que commitear."
           else
-            git commit -m "build: actualizar samsung-music.apk [skip ci]"
+            git commit -m "build: actualizar APK release [skip ci]"
             git push
           fi
 
       - name: Delete in-progress release (if rerun)
-        if: github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || github.event_name == 'workflow_dispatch'
         run: |
-          VERSION="v$(date +'%Y.%m.%d')"
+          VERSION="v1.1.${{ github.run_number }}"
           gh release delete "$VERSION" --yes --cleanup-tag 2>/dev/null || true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Publish APK to GitHub Releases
-        if: github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || github.event_name == 'workflow_dispatch'
         run: |
-          VERSION="v$(date +'%Y.%m.%d')"
-          gh release create "$VERSION" samsung-music.apk \
-            --title "Samsung Music $VERSION" \
-            --notes "APK debug generado automáticamente.
+          VERSION="v1.1.${{ github.run_number }}"
+          FILES="samsung-music.apk"
+          if [ -f samsung-music-release.apk ]; then
+            FILES="samsung-music.apk samsung-music-release.apk"
+          fi
+          gh release create "$VERSION" $FILES \
+            --title "Samsung Music $VERSION (Release)" \
+            --notes "APK de Samsung Music (Release) generado automáticamente por GitHub Actions.
 
-          - Búsqueda unificada: biblioteca local primero, luego YouTube / YouTube Music
-          - Widget de lista de reproducción
-          - Barra de reproducción persistente y aleatorio real
-
-          Instala el APK permitiendo 'orígenes desconocidos' en tu dispositivo Android." \
+          Novedades y optimizaciones:
+          - Detección inteligente de canciones existentes: evita redescargar temas que ya tenemos en disco o en la biblioteca
+          - Modo aleatorio (shuffle) mejorado sin saltos ni repeticiones erróneas
+          - Pestaña de Artistas restaurada agrupando por similitud (ignorando tildes, espacios y mayúsculas)
+          - Búsqueda por título o autor/artista con salida limpia mediante el botón Atrás" \
             --latest
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

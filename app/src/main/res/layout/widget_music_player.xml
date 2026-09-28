@@ -31,7 +31,7 @@
             android:id="@+id/widget_song_title"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Música"
+            android:text="Samsung Music"
             android:maxLines="1"/>
         <TextView
             android:textSize="12sp"

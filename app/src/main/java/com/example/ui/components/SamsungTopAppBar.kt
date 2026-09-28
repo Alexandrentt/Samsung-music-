@@ -9,11 +9,8 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bedtime
-import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -55,10 +52,7 @@ fun SamsungTopAppBar(
     onShowStats: () -> Unit,
     onCleanFolder: () -> Unit,
     onEnrichAll: () -> Unit,
-    onExportCsv: () -> Unit,
-    onShowCrashLog: () -> Unit = {},
-    onRescanSongs: () -> Unit = {},
-    onPickMusicFolder: () -> Unit = {}
+    onExportCsv: () -> Unit
 ) {
     var showMenu by remember { mutableStateOf(false) }
     val keyboardController = LocalSoftwareKeyboardController.current
@@ -189,51 +183,6 @@ fun SamsungTopAppBar(
                         onClick = {
                             showMenu = false
                             onExportCsv()
-                        }
-                    )
-                    DropdownMenuItem(
-                        text = { Text("Carpeta de música…") },
-                        leadingIcon = {
-                            Icon(
-                                imageVector = Icons.Default.FolderOpen,
-                                contentDescription = null,
-                                modifier = Modifier.size(20.dp),
-                                tint = MaterialTheme.colorScheme.onSurface
-                            )
-                        },
-                        onClick = {
-                            showMenu = false
-                            onPickMusicFolder()
-                        }
-                    )
-                    DropdownMenuItem(
-                        text = { Text("Reescanear canciones") },
-                        leadingIcon = {
-                            Icon(
-                                imageVector = Icons.Default.Refresh,
-                                contentDescription = null,
-                                modifier = Modifier.size(20.dp),
-                                tint = MaterialTheme.colorScheme.onSurface
-                            )
-                        },
-                        onClick = {
-                            showMenu = false
-                            onRescanSongs()
-                        }
-                    )
-                    DropdownMenuItem(
-                        text = { Text("Registro de errores") },
-                        leadingIcon = {
-                            Icon(
-                                imageVector = Icons.Default.BugReport,
-                                contentDescription = null,
-                                modifier = Modifier.size(20.dp),
-                                tint = MaterialTheme.colorScheme.onSurface
-                            )
-                        },
-                        onClick = {
-                            showMenu = false
-                            onShowCrashLog()
                         }
                     )
                 }

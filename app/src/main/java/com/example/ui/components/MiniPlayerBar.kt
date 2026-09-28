@@ -15,6 +15,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
@@ -28,18 +30,14 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
-import coil.request.ImageRequest
 import com.example.R
 import com.example.data.Song
 
@@ -69,12 +67,6 @@ fun MiniPlayerBar(
         0f
     }
 
-    // "1:23" / "3:45" para el subtítulo mientras suena música
-    fun fmtTime(ms: Long): String {
-        val totalSec = (ms / 1000).coerceAtLeast(0)
-        return "%d:%02d".format(totalSec / 60, totalSec % 60)
-    }
-
     Box(
         modifier = Modifier
             .fillMaxWidth()
@@ -95,49 +87,16 @@ fun MiniPlayerBar(
             tonalElevation = 6.dp,
             shadowElevation = 8.dp
         ) {
-            Box(modifier = Modifier.fillMaxWidth()) {
-            // Portada translúcida de FONDO (estilo One UI): llena la barra y
-            // da contexto visual sin robar espacio a los botones.
-            Box(modifier = Modifier.matchParentSize()) {
-                if (displaySong?.coverArtUrl != null) {
-                    AsyncImage(
-                        model = ImageRequest.Builder(LocalContext.current)
-                            .data(displaySong.coverArtUrl)
-                            .size(300)
-                            .build(),
-                        contentDescription = null,
-                        modifier = Modifier.matchParentSize(),
-                        contentScale = ContentScale.Crop,
-                        alpha = 0.35f
-                    )
-                    // Velo que garantiza contraste del texto y botones
-                    Box(
-                        modifier = Modifier
-                            .matchParentSize()
-                            .background(
-                                Brush.horizontalGradient(
-                                    colors = listOf(
-                                        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.92f),
-                                        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.78f)
-                                    )
-                                )
-                            )
-                    )
-                }
-            }
-
             Column(modifier = Modifier.fillMaxWidth()) {
-                // Barra de progreso en la parte superior
+                // Barra de progreso sutil en la parte superior
                 if (currentSong != null) {
                     LinearProgressIndicator(
                         progress = { progress },
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(3.dp),
+                            .height(2.5.dp),
                         color = MaterialTheme.colorScheme.primary,
-                        trackColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.10f),
-                        strokeCap = StrokeCap.Round,
-                        gapSize = 0.dp
+                        trackColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f)
                     )
                 }
 
@@ -147,24 +106,53 @@ fun MiniPlayerBar(
                         .padding(horizontal = 10.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // Miniatura de portada compacta (solo si HAY portada). Sin
-                    // portada NO se reserva ningún hueco: era el "espacio muerto"
-                    // del lado izquierdo — el texto empieza donde empieza la barra.
-                    val coverUrl = displaySong?.coverArtUrl
-                    if (coverUrl != null) {
-                        AsyncImage(
-                            model = ImageRequest.Builder(LocalContext.current)
-                                .data(coverUrl)
-                                .size(120)
-                                .build(),
-                            contentDescription = null,
+                    // Carátula de la canción con affordance para expandir
+                    Box(
+                        modifier = Modifier
+                            .size(48.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(MaterialTheme.colorScheme.surface),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        if (displaySong?.coverArtUrl != null) {
+                            AsyncImage(
+                                model = displaySong.coverArtUrl,
+                                contentDescription = displaySong.title,
+                                modifier = Modifier
+                                    .size(48.dp)
+                                    .clip(RoundedCornerShape(10.dp)),
+                                contentScale = ContentScale.Crop
+                            )
+                        } else {
+                            Icon(
+                                imageVector = Icons.Default.MusicNote,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
+
+                        // Icono sutil de expandir
+                        Box(
                             modifier = Modifier
-                                .size(40.dp)
-                                .clip(RoundedCornerShape(10.dp)),
-                            contentScale = ContentScale.Crop
-                        )
-                        Spacer(modifier = Modifier.width(12.dp))
+                                .align(Alignment.TopEnd)
+                                .size(14.dp)
+                                .background(
+                                    color = Color.Black.copy(alpha = 0.4f),
+                                    shape = RoundedCornerShape(bottomStart = 6.dp, topEnd = 10.dp)
+                                ),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.KeyboardArrowUp,
+                                contentDescription = "Expandir reproductor",
+                                tint = Color.White,
+                                modifier = Modifier.size(10.dp)
+                            )
+                        }
                     }
+
+                    Spacer(modifier = Modifier.width(12.dp))
 
                     // Información de pista
                     Column(
@@ -173,7 +161,7 @@ fun MiniPlayerBar(
                             .padding(end = 4.dp)
                     ) {
                         Text(
-                            text = displaySong?.title ?: "Música",
+                            text = displaySong?.title ?: "Samsung Music",
                             fontWeight = FontWeight.SemiBold,
                             fontSize = 14.sp,
                             maxLines = 1,
@@ -181,11 +169,10 @@ fun MiniPlayerBar(
                             color = MaterialTheme.colorScheme.onSurface
                         )
                         Text(
-                            text = when {
-                                displaySong == null -> "Selecciona una canción para escuchar"
-                                currentSong == null -> "${displaySong.artist} • Toca para escuchar"
-                                durationMs > 0 -> "${displaySong.artist} • ${fmtTime(currentPositionMs)} / ${fmtTime(durationMs)}"
-                                else -> displaySong.artist
+                            text = if (displaySong != null) {
+                                if (currentSong != null) displaySong.artist else "${displaySong.artist} • Toca para escuchar"
+                            } else {
+                                "Selecciona una canción para escuchar"
                             },
                             fontSize = 12.sp,
                             maxLines = 1,
@@ -252,7 +239,6 @@ fun MiniPlayerBar(
                         )
                     }
                 }
-            }
             }
         }
     }

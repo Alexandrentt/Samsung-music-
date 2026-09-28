@@ -60,6 +60,9 @@ class AudioPlayerManager(private val context: Context) {
     private val _queue = MutableStateFlow<List<Song>>(emptyList())
     val queue: StateFlow<List<Song>> = _queue.asStateFlow()
 
+    private var unshuffledQueue: List<Song> = emptyList()
+    private val shuffleHistory: MutableList<Song> = mutableListOf()
+
     private val _currentLyrics = MutableStateFlow<List<LyricLine>>(emptyList())
     val currentLyrics: StateFlow<List<LyricLine>> = _currentLyrics.asStateFlow()
 
@@ -150,13 +153,6 @@ class AudioPlayerManager(private val context: Context) {
         _currentSong.value?.let { song ->
             onToggleFavoriteCallback?.invoke(song)
         }
-    }
-
-    /** Refresca la canción actual tras editar sus metadatos (título/artista/álbum). */
-    fun updateCurrentSongInfo(updated: Song) {
-        _currentSong.value = updated
-        _queue.value = _queue.value.map { if (it.id == updated.id) updated else it }
-        notifyForegroundService(_isPlaying.value)
     }
 
     fun updateCurrentSongCover(newCoverUrl: String) {
@@ -341,14 +337,48 @@ class AudioPlayerManager(private val context: Context) {
     fun playSong(song: Song, newQueue: List<Song> = emptyList()) {
         try {
             if (newQueue.isNotEmpty()) {
-                _queue.value = newQueue
+                unshuffledQueue = newQueue
+                if (_isShuffleEnabled.value) {
+                    val remaining = newQueue.filter { it.id != song.id }.shuffled()
+                    _queue.value = listOf(song) + remaining
+                } else {
+                    _queue.value = newQueue
+                }
             } else if (!_queue.value.any { it.id == song.id }) {
                 _queue.value = _queue.value + song
+                unshuffledQueue = unshuffledQueue + song
             }
 
+            playSongInternal(song)
+        } catch (e: Throwable) {
+            e.printStackTrace()
+            _playbackError.value = "Error al reproducir: ${e.message}"
+        }
+    }
+
+    private fun playSongInternal(song: Song) {
+        try {
             _currentSong.value = song
             hasCountedHalfPlay = false
             loadLyricsForSong(song)
+
+            if (song.filePath.isBlank()) {
+                _playbackError.value = "Preparando audio…"
+                scope.launch(Dispatchers.IO) {
+                    val preparedSong = ensureSongAudioFile(song)
+                    withContext(Dispatchers.Main) {
+                        if (preparedSong != null) {
+                            _currentSong.value = preparedSong
+                            _playbackError.value = null
+                            startPlayback(preparedSong)
+                        } else {
+                            _playbackError.value = "No se pudo preparar el audio para esta canción."
+                            notifyForegroundService(false)
+                        }
+                    }
+                }
+                return
+            }
 
             val file = File(song.filePath)
             if (file.exists() && file.length() > 1000L) {
@@ -359,7 +389,6 @@ class AudioPlayerManager(private val context: Context) {
                 scope.launch(Dispatchers.IO) {
                     val preparedSong = ensureSongAudioFile(song)
                     withContext(Dispatchers.Main) {
-                        if (_currentSong.value?.id != song.id) return@withContext // llegó otra petición
                         if (preparedSong != null) {
                             _currentSong.value = preparedSong
                             _playbackError.value = null
@@ -371,10 +400,9 @@ class AudioPlayerManager(private val context: Context) {
                     }
                 }
             }
-        } catch (e: Exception) {
-            // Nunca dejar que un error de reproducción tumbe el proceso entero.
-            android.util.Log.e("AudioPlayerManager", "Error al iniciar reproducción", e)
-            _playbackError.value = "No se pudo reproducir: ${e.message ?: "error desconocido"}"
+        } catch (e: Throwable) {
+            e.printStackTrace()
+            _playbackError.value = "Error al iniciar canción: ${e.message}"
         }
     }
 
@@ -383,19 +411,21 @@ class AudioPlayerManager(private val context: Context) {
      * usando respaldo armónico si YouTube está bloqueado por el emulador.
      */
     private suspend fun ensureSongAudioFile(song: Song): Song? = withContext(Dispatchers.IO) {
-        val target = File(song.filePath)
+        val target = if (song.filePath.isNotBlank()) {
+            File(song.filePath)
+        } else {
+            val musicFolder = File(context.getExternalFilesDir(Environment.DIRECTORY_MUSIC), "SamsungMusic")
+            musicFolder.mkdirs()
+            val safeName = song.title.replace(Regex("[^a-zA-Z0-9._-]"), "_").ifBlank { "song" }
+            File(musicFolder, "${safeName}_${song.id}.m4a")
+        }
         if (target.exists() && target.length() > 1000L) {
-            return@withContext song
+            return@withContext song.copy(filePath = target.absolutePath, isDownloaded = true)
         }
 
         try {
-            // El ID del video debe ser válido (11 caracteres); si la canción no
-            // viene de YouTube no hay nada que re-descargar.
-            val cleanId = song.youtubeVideoId
-            if (cleanId.isNullOrBlank() || !Regex("[a-zA-Z0-9_-]{11}").matches(cleanId)) {
-                return@withContext null
-            }
             target.parentFile?.mkdirs()
+            val cleanId = song.youtubeVideoId ?: song.id.removePrefix("yt_")
             val written = YouTubeAudioDownloader.downloadToFile(
                 videoId = cleanId,
                 context = context,
@@ -403,11 +433,12 @@ class AudioPlayerManager(private val context: Context) {
             )
             val duration = YouTubeAudioDownloader.probeDurationMs(target.absolutePath)
             song.copy(
+                filePath = target.absolutePath,
                 fileSizeBytes = written,
                 durationMs = if (duration > 0) duration else if (song.durationMs > 0) song.durationMs else 90000L,
                 isDownloaded = true
             )
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             e.printStackTrace()
             null
         }
@@ -428,39 +459,19 @@ class AudioPlayerManager(private val context: Context) {
         _currentLyrics.value = emptyList()
     }
 
-    /**
-     * Preparación ASÍNCRONA de la nueva canción.
-     *
-     * Antes: setDataSource+prepare() corrían en el hilo llamador (Main) y
-     * congelaban la UI en cada cambio de canción; además el MediaPlayer
-     * anterior seguía sonando hasta que el prepare terminaba — por eso el
-     * audio "se quedaba en la canción anterior y luego cambiaba".
-     *
-     * Ahora: se detiene el audio viejo INMEDIATAMENTE, el prepare corre en IO
-     * y si mientras tanto se pidió otra canción, el resultado se descarta.
-     */
     private fun startPlayback(song: Song) {
-        // 1) Silencia y libera el reproductor anterior al instante (sin overlap)
-        progressJob?.cancel()
-        try {
-            mediaPlayer?.pause()
-        } catch (_: Exception) {
-        }
         try {
             mediaPlayer?.release()
-        } catch (_: Exception) {
-        }
+        } catch (_: Throwable) {}
         mediaPlayer = null
         _currentPositionMs.value = 0L
         _isPlaying.value = false
 
-        val file = File(song.filePath)
-        if (!file.exists() || file.length() == 0L) {
+        if (song.filePath.isBlank()) {
             _playbackError.value = "Preparando archivo de audio…"
             scope.launch(Dispatchers.IO) {
                 val prepared = ensureSongAudioFile(song)
                 withContext(Dispatchers.Main) {
-                    if (_currentSong.value?.id != song.id) return@withContext
                     if (prepared != null) {
                         _currentSong.value = prepared
                         startPlayback(prepared)
@@ -473,70 +484,65 @@ class AudioPlayerManager(private val context: Context) {
             return
         }
 
-        _playbackError.value = null
-        requestAudioFocus()
-
-        // 2) setDataSource+prepare en IO: la UI nunca se bloquea
-        scope.launch(Dispatchers.IO) {
-            val prepared: MediaPlayer? = try {
-                val mp = MediaPlayer()
-                mp.setDataSource(file.absolutePath)
-                mp.prepare()
-                mp
-            } catch (e: Exception) {
-                e.printStackTrace()
-                null
-            }
-
-            withContext(Dispatchers.Main) {
-                // 3) Descarta preparaciones obsoletas por saltos rápidos
-                if (_currentSong.value?.id != song.id) {
-                    try {
-                        prepared?.release()
-                    } catch (_: Exception) {
-                    }
-                    return@withContext
-                }
-                if (prepared == null) {
-                    _playbackError.value = "No se pudo reproducir el audio (archivo no compatible)"
-                    notifyForegroundService(false)
-                    return@withContext
-                }
-
-                val mp = prepared
-                val actualDuration = if (mp.duration > 0) mp.duration.toLong() else song.durationMs
-                _durationMs.value = actualDuration
-
-                mp.setOnCompletionListener {
-                    // Callback del hilo del sistema: cualquier excepción aquí mata
-                    // el proceso y se percibe como "la app se cierra sola".
-                    try {
-                        handleSongCompletion()
-                    } catch (e: Exception) {
-                        android.util.Log.e("AudioPlayerManager", "Error al pasar a la siguiente canción", e)
+        val file = File(song.filePath)
+        if (!file.exists() || file.length() == 0L) {
+            _playbackError.value = "Preparando archivo de audio…"
+            scope.launch(Dispatchers.IO) {
+                val prepared = ensureSongAudioFile(song)
+                withContext(Dispatchers.Main) {
+                    if (prepared != null) {
+                        _currentSong.value = prepared
+                        startPlayback(prepared)
+                    } else {
+                        _playbackError.value = "El audio no está disponible."
+                        notifyForegroundService(false)
                     }
                 }
-                mp.setOnErrorListener { _, what, extra ->
-                    _playbackError.value = "Error de reproducción ($what/$extra)"
-                    _isPlaying.value = false
-                    notifyForegroundService(false)
-                    true
-                }
-
-                // Aplicar volumen normal o atenuado según estado de ducking
-                if (isDuckedByFocus) {
-                    mp.setVolume(0.2f, 0.2f)
-                } else {
-                    mp.setVolume(1.0f, 1.0f)
-                }
-
-                mp.start()
-                mediaPlayer = mp
-                _isPlaying.value = true
-                _playbackError.value = null
-                startProgressTicker()
-                notifyForegroundService(true)
             }
+            return
+        }
+
+        try {
+            requestAudioFocus()
+
+            val mp = MediaPlayer()
+            mp.setDataSource(file.absolutePath)
+            mp.prepare()
+
+            val actualDuration = if (mp.duration > 0) mp.duration.toLong() else song.durationMs
+            _durationMs.value = actualDuration
+
+            mp.setOnCompletionListener {
+                handleSongCompletion()
+            }
+            mp.setOnErrorListener { _, what, extra ->
+                _playbackError.value = "Error de reproducción ($what/$extra)"
+                _isPlaying.value = false
+                notifyForegroundService(false)
+                true
+            }
+
+            // Aplicar volumen normal o atenuado según estado de ducking
+            if (isDuckedByFocus) {
+                mp.setVolume(0.2f, 0.2f)
+            } else {
+                mp.setVolume(1.0f, 1.0f)
+            }
+
+            mp.start()
+            mediaPlayer = mp
+            _isPlaying.value = true
+            _playbackError.value = null
+            startProgressTicker()
+            notifyForegroundService(true)
+        } catch (e: Throwable) {
+            e.printStackTrace()
+            try {
+                mediaPlayer?.release()
+            } catch (_: Throwable) {}
+            mediaPlayer = null
+            _playbackError.value = "No se pudo reproducir el audio: ${e.message ?: "archivo no compatible"}"
+            notifyForegroundService(false)
         }
     }
 
@@ -556,8 +562,16 @@ class AudioPlayerManager(private val context: Context) {
                 putExtra(MusicPlaybackService.EXTRA_POSITION_MS, _currentPositionMs.value)
                 putExtra(MusicPlaybackService.EXTRA_DURATION_MS, _durationMs.value)
             }
-            ContextCompat.startForegroundService(context, intent)
-        } catch (e: Exception) {
+            try {
+                ContextCompat.startForegroundService(context, intent)
+            } catch (_: Throwable) {
+                try {
+                    context.startService(intent)
+                } catch (e2: Throwable) {
+                    e2.printStackTrace()
+                }
+            }
+        } catch (e: Throwable) {
             e.printStackTrace()
         }
     }
@@ -635,50 +649,96 @@ class AudioPlayerManager(private val context: Context) {
     }
 
     fun skipToNext() {
-        val q = _queue.value
-        if (q.isEmpty()) return
-        val current = _currentSong.value ?: run {
-            playSong(q.first())
-            return
-        }
-        val idx = q.indexOfFirst { it.id == current.id }
-        if (_isShuffleEnabled.value && q.size > 1) {
-            val remaining = q.filter { it.id != current.id }
-            playSong(remaining.random())
-        } else if (idx != -1 && idx < q.size - 1) {
-            playSong(q[idx + 1])
-        } else if (_repeatMode.value == RepeatMode.ALL) {
-            playSong(q.first())
-        } else {
-            // Fin de la lista
-            pause()
-            seekTo(0L)
+        try {
+            val q = _queue.value
+            if (q.isEmpty()) return
+            val current = _currentSong.value ?: run {
+                playSongInternal(q.first())
+                return
+            }
+            val idx = q.indexOfFirst { it.id == current.id }
+            if (idx == -1) {
+                // Si la canción actual no está en la cola, comienza desde la primera
+                playSongInternal(q.first())
+            } else if (idx < q.size - 1) {
+                shuffleHistory.add(current)
+                playSongInternal(q[idx + 1])
+            } else if (_repeatMode.value == RepeatMode.ALL) {
+                shuffleHistory.add(current)
+                if (_isShuffleEnabled.value && q.size > 1) {
+                    val remaining = q.filter { it.id != current.id }.shuffled()
+                    val reordered = remaining + current
+                    _queue.value = reordered
+                    playSongInternal(reordered.first())
+                } else {
+                    playSongInternal(q.first())
+                }
+            } else {
+                pause()
+                seekTo(0L)
+            }
+        } catch (e: Throwable) {
+            e.printStackTrace()
         }
     }
 
     fun skipToPrevious() {
-        if (_currentPositionMs.value > 3000L) {
-            seekTo(0L)
-            return
-        }
-        val q = _queue.value
-        if (q.isEmpty()) return
-        val current = _currentSong.value ?: return
-        val idx = q.indexOfFirst { it.id == current.id }
-        if (idx > 0) {
-            playSong(q[idx - 1])
-        } else {
-            playSong(q.last())
+        try {
+            if (_currentPositionMs.value > 3000L) {
+                seekTo(0L)
+                return
+            }
+            val q = _queue.value
+            if (q.isEmpty()) return
+            val current = _currentSong.value ?: return
+
+            if (shuffleHistory.isNotEmpty()) {
+                val prev = shuffleHistory.removeAt(shuffleHistory.lastIndex)
+                playSongInternal(prev)
+                return
+            }
+
+            val idx = q.indexOfFirst { it.id == current.id }
+            if (idx == -1) {
+                playSongInternal(q.first())
+            } else if (idx > 0) {
+                playSongInternal(q[idx - 1])
+            } else if (_repeatMode.value == RepeatMode.ALL) {
+                playSongInternal(q.last())
+            } else {
+                seekTo(0L)
+            }
+        } catch (e: Throwable) {
+            e.printStackTrace()
         }
     }
 
     fun toggleShuffle() {
-        _isShuffleEnabled.value = !_isShuffleEnabled.value
-        notifyForegroundService(_isPlaying.value)
+        setShuffle(!_isShuffleEnabled.value)
     }
 
     fun setShuffle(enabled: Boolean) {
+        if (_isShuffleEnabled.value == enabled) return
         _isShuffleEnabled.value = enabled
+        val current = _currentSong.value
+
+        if (enabled) {
+            if (unshuffledQueue.isEmpty() && _queue.value.isNotEmpty()) {
+                unshuffledQueue = _queue.value
+            }
+            if (_queue.value.isNotEmpty()) {
+                if (current != null) {
+                    val remaining = _queue.value.filter { it.id != current.id }.shuffled()
+                    _queue.value = listOf(current) + remaining
+                } else {
+                    _queue.value = _queue.value.shuffled()
+                }
+            }
+        } else {
+            if (unshuffledQueue.isNotEmpty()) {
+                _queue.value = unshuffledQueue
+            }
+        }
         notifyForegroundService(_isPlaying.value)
     }
 
@@ -707,14 +767,17 @@ class AudioPlayerManager(private val context: Context) {
         val cleanSongs = songs.filter { s -> currentQueue.none { it.id == s.id } }
         currentQueue.addAll(insertIndex, cleanSongs)
         _queue.value = currentQueue
+        unshuffledQueue = unshuffledQueue + cleanSongs
         if (_currentSong.value == null && currentQueue.isNotEmpty()) {
-            playSong(currentQueue.first())
+            playSongInternal(currentQueue.first())
         }
     }
 
     fun removeFromQueue(songId: String) {
         val currentQueue = _queue.value.toMutableList()
         val index = currentQueue.indexOfFirst { it.id == songId }
+        unshuffledQueue = unshuffledQueue.filter { it.id != songId }
+        shuffleHistory.removeAll { it.id == songId }
         if (index != -1) {
             val isCurrent = _currentSong.value?.id == songId
             currentQueue.removeAt(index)
@@ -722,7 +785,7 @@ class AudioPlayerManager(private val context: Context) {
             if (isCurrent) {
                 if (currentQueue.isNotEmpty()) {
                     val nextIndex = if (index < currentQueue.size) index else 0
-                    playSong(currentQueue[nextIndex])
+                    playSongInternal(currentQueue[nextIndex])
                 } else {
                     stopPlayer()
                     _currentSong.value = null
@@ -748,17 +811,25 @@ class AudioPlayerManager(private val context: Context) {
             return
         }
         if (_repeatMode.value == RepeatMode.ONE) {
-            _currentSong.value?.let { playSong(it) }
+            _currentSong.value?.let { playSongInternal(it) }
         } else {
             skipToNext()
         }
     }
 
     fun startShuffled(songs: List<Song>) {
-        if (songs.isEmpty()) return
-        val shuffled = songs.shuffled()
-        _isShuffleEnabled.value = true
-        playSong(shuffled.first(), shuffled)
+        try {
+            if (songs.isEmpty()) return
+            _isShuffleEnabled.value = true
+            unshuffledQueue = songs
+            val shuffled = songs.shuffled()
+            _queue.value = shuffled
+            shuffleHistory.clear()
+            playSongInternal(shuffled.first())
+        } catch (e: Throwable) {
+            e.printStackTrace()
+            _playbackError.value = "Error al iniciar aleatorio: ${e.message}"
+        }
     }
 
     fun playShuffled(songs: List<Song>) {
@@ -799,9 +870,7 @@ class AudioPlayerManager(private val context: Context) {
                 }
 
                 val now = System.currentTimeMillis()
-                // Cada 5 s: cada notificación re-renderiza RemoteViews + widgets;
-                // cada 2 s era trabajo innecesario que se notaba como lag.
-                if (now - lastNotifTick >= 5000L) {
+                if (now - lastNotifTick >= 2000L) {
                     lastNotifTick = now
                     notifyForegroundService(_isPlaying.value)
                 }

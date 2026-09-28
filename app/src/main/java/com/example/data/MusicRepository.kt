@@ -62,6 +62,10 @@ class MusicRepository(
         return songDao.getSongById(songId)
     }
 
+    suspend fun getSongByYoutubeId(videoId: String): Song? {
+        return songDao.getSongByYoutubeId(videoId)
+    }
+
     suspend fun insertSong(song: Song) {
         songDao.insertSong(song)
     }

@@ -19,7 +19,7 @@ class MusicAppWidgetProvider : AppWidgetProvider() {
         val song = player?.currentSong?.value
         val isPlaying = player?.isPlaying?.value ?: false
 
-        val title = song?.title ?: "Música"
+        val title = song?.title ?: "Samsung Music"
         val artist = song?.artist ?: "Toca para abrir la biblioteca"
 
         for (appWidgetId in appWidgetIds) {

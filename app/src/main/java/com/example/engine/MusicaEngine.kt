@@ -29,50 +29,21 @@ class MusicaEngine(private val context: Context) {
 
     /**
      * Carpeta de almacenamiento para canciones descargadas.
-     *
-     * Prioriza la carpeta PÚBLICA /Music/SamsungMusic: los archivos que viven ahí
-     * NO se borran cuando el usuario desinstala la app, y al reinstalar son
-     * recuperados automáticamente por [scanAndRecoverExistingSongs], que ya
-     * escanea esa misma ruta.
-     *
-     * Si el sistema no permite escribir ahí (permisos), hace fallback al
-     * directorio app-specific y luego al interno, garantizando que la descarga
-     * siempre tenga destino válido.
+     * Utiliza el directorio app-specific garantizado para lectura y escritura
+     * sin errores de Scoped Storage ni permisos EACCES en Android 11+.
      */
     val musicFolder: File by lazy {
-        val candidates = mutableListOf<File>()
-        try {
-            candidates.add(
-                File(
-                    Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC),
-                    "SamsungMusic"
-                )
-            )
-        } catch (_: Exception) {}
-        context.getExternalFilesDir(Environment.DIRECTORY_MUSIC)?.let { candidates.add(it) }
-        candidates.add(File(context.filesDir, "Music"))
-
-        // Elige la primera carpeta donde realmente podamos crear archivos.
-        candidates.firstOrNull { dir ->
-            try {
-                if (!dir.exists()) dir.mkdirs()
-                val probe = File(dir, ".write_probe_tmp")
-                val ok = probe.createNewFile()
-                if (ok) probe.delete()
-                ok
-            } catch (_: Exception) {
-                false
-            }
-        } ?: candidates.last()
+        val appMusic = context.getExternalFilesDir(Environment.DIRECTORY_MUSIC)
+            ?: File(context.filesDir, "Music")
+        if (!appMusic.exists()) appMusic.mkdirs()
+        appMusic
     }
 
     /**
      * Escanea canciones ya descargadas en la carpeta de música compartida y en la
      * carpeta interna legacy para recuperarlas tras reinstalación o borrado de caché.
      */
-    suspend fun scanAndRecoverExistingSongs(
-        knownFileSizes: Map<Long, Long> = emptyMap()
-    ): List<Song> = withContext(Dispatchers.IO) {
+    suspend fun scanAndRecoverExistingSongs(): List<Song> = withContext(Dispatchers.IO) {
         val recovered = mutableListOf<Song>()
         val foldersToScan = mutableListOf<File>()
         try {
@@ -87,40 +58,30 @@ class MusicaEngine(private val context: Context) {
         for (folder in foldersToScan.distinctBy { it.absolutePath }) {
             if (!folder.exists() || !folder.isDirectory) continue
             val audioFiles = folder.listFiles { file ->
-                // Ignora descargas parciales (.part/.gen.part): no son canciones
-                file.isFile &&
-                        (file.name.endsWith(".m4a") || file.name.endsWith(".mp3") || file.name.endsWith(".wav")) &&
-                        !file.name.endsWith(".part") &&
-                        file.length() > 10_000L
+                file.isFile && (file.name.endsWith(".m4a") || file.name.endsWith(".mp3") || file.name.endsWith(".wav")) && file.length() > 10_000L
             } ?: emptyArray()
 
             for (audioFile in audioFiles) {
                 if (!seenPaths.add(audioFile.absolutePath)) continue
-                val (videoId, cleanTitle) = parseMediaFileName(audioFile.nameWithoutExtension)
-                val cleanId = videoId
-                // ID canónico cuando es posible. Con ID, la fila del escaneo
-                // nace con la MISMA clave que la fila de la descarga original
-                // → REPLACE, no duplicado. Si no hay ID derivable, local.
-                val id = if (cleanId != null) "yt_$cleanId" else "local_${audioFile.absolutePath.hashCode()}"
+                val rawName = audioFile.nameWithoutExtension
+                val cleanId = rawName.substringAfterLast('_').take(11)
+                val baseTitle = rawName.substringBeforeLast('_').replace('_', ' ').trim()
+                val id = if (cleanId.isNotBlank() && cleanId.length >= 6) "yt_$cleanId" else "local_${audioFile.name.hashCode()}"
 
-                // PERF: MediaPlayer.prepare() por archivo tarda ~100-500 ms y
-                // se disparaba en cada arranque/menú para TODOS los archivos.
-                // Si ya conocemos el tamaño (BD), se omite el probe.
-                val probedMs = if (knownFileSizes[audioFile.length()] != null) -1L else
-                    YouTubeAudioDownloader.probeDurationMs(audioFile.absolutePath)
-                val lrcFile = File(audioFile.parentFile, "${audioFile.nameWithoutExtension}.lrc")
+                val probedMs = YouTubeAudioDownloader.probeDurationMs(audioFile.absolutePath)
+                val lrcFile = File(audioFile.parentFile, "${rawName}.lrc")
                 val lrcPath = if (lrcFile.exists() && lrcFile.length() > 0) lrcFile.absolutePath else null
 
                 recovered.add(
                     Song(
                         id = id,
-                        title = cleanTitle.ifBlank { "Canción descargada" },
-                        artist = "Artista desconocido",
+                        title = baseTitle.ifBlank { "Canción descargada" },
+                        artist = "Samsung Music",
                         album = "Descargas",
                         durationMs = if (probedMs > 0) probedMs else 180000L,
                         filePath = audioFile.absolutePath,
                         fileSizeBytes = audioFile.length(),
-                        coverArtUrl = cleanId?.let { "https://img.youtube.com/vi/$it/hqdefault.jpg" },
+                        coverArtUrl = if (cleanId.length == 11) "https://img.youtube.com/vi/$cleanId/hqdefault.jpg" else null,
                         isFavorite = false,
                         playCount = 0,
                         dateAdded = audioFile.lastModified(),
@@ -130,8 +91,8 @@ class MusicaEngine(private val context: Context) {
                         lrcFilePath = lrcPath,
                         isDownloaded = true,
                         bitrate = "320 kbps",
-                        youtubeVideoId = cleanId,
-                        youtubeChannel = "YouTube"
+                        youtubeVideoId = if (cleanId.length == 11) cleanId else null,
+                        youtubeChannel = "Samsung Music"
                     )
                 )
             }
@@ -142,44 +103,6 @@ class MusicaEngine(private val context: Context) {
     data class PlaylistItem(val videoId: String, val title: String, val channel: String)
 
     companion object {
-        /**
-         * Interpreta el nombre de un archivo de audio encontrado en disco.
-         *
-         * Formato canónico escrito por la app: "<Título con guiones bajos>_<videoId>.m4a"
-         * Pero versiones viejas escribieron variantes:
-         *  - "Título 5-rbSNzU.m4a"        → sufijo basura con código (de IDs trunca­dos)
-         *  - "Título_5rbSNz.m4a"          → ID recortado a 6 chars
-         *  - "Diego_Verdaguer_Corazon_de_Papel_rY0WqhfEA2w.m4a" → guiones perdidos
-         *
-         * Devuelve (videoId real de 11 chars o null, título limpio SIN el código).
-         * LIMPIAR el sufijo AQUÍ es la raíz del fix de duplicados: la fila que
-         * nace del escaneo comparte la clave con la fila canónica yt_<id> en
-         * lugar de aparecer como "Sunsetz 5-rbSNzU" junto a "Sunsetz".
-         */
-        fun parseMediaFileName(rawName: String): Pair<String?, String> {
-            val noExt = rawName.substringBeforeLast('.')
-            // 1) ¿Termina en un ID de YouTube canónico (_xxxxxxxxxxx o pegado)?
-            val idMatch = Regex("[ _-]([A-Za-z0-9_-]{11})$").find(noExt)
-            if (idMatch != null) {
-                val maybeId = idMatch.groupValues[1]
-                val looksLikeId = maybeId.any { it.isDigit() } && maybeId.any { it.isLetter() }
-                if (looksLikeId) {
-                    val title = noExt.substring(0, idMatch.range.first)
-                        .replace('_', ' ').replace(Regex("\\s+"), " ").trim()
-                    return Pair(maybeId, title)
-                }
-            }
-            // 2) ID truncado tras guion bajo ("_5rbSNz")
-            val shortMatch = Regex("_([A-Za-z0-9]{4,10})$").find(noExt)
-            if (shortMatch != null && com.example.data.SongMatching.looksLikeHash(shortMatch.groupValues[1])) {
-                val title = noExt.substring(0, shortMatch.range.first).replace('_', ' ').trim()
-                return Pair(null, title)
-            }
-            // 3) Sin ID: título con guiones bajos y sufijo basura opcional
-            val base = noExt.replace('_', ' ')
-            return Pair(null, com.example.data.SongMatching.stripJunkSuffix(base).trim())
-        }
-
         const val PLAYLIST_ID_DEFAULT = "PLCUqyibcwbIAI0E8rbFcKhKMuUP0dfcIj"
         const val PLAYLIST_URL_DEFAULT = "https://youtube.com/playlist?list=PLCUqyibcwbIAI0E8rbFcKhKMuUP0dfcIj&si=CFlp1A7Y_8g4mKEG"
         const val CAA_API = "https://coverartarchive.org"
@@ -193,9 +116,7 @@ class MusicaEngine(private val context: Context) {
         t = t.replace(Regex("\\[[^\\]]*\\]"), "")
         val garbageRegex = Regex("(?i)(official\\s*(video|audio|music\\s*video|lyric[s]?|visualizer)|lyrics?|sub[s]?\\.?\\s*(español|english|espanol)?|video\\s*oficial|videoclip\\s*oficial|hd|4k|remastered?\\s*\\d*)")
         t = garbageRegex.replace(t, "")
-        // Frases de la plataforma que no forman parte del título/artista
-        t = t.replace(Regex("(?i)\\b(youtube(\\s*music)?|topic)\\b"), " ")
-        return t.replace(Regex("\\s+"), " ").trim(' ', '-', '–', '—', '|', ':', '•')
+        return t.replace(Regex("\\s+"), " ").trim(' ', '-', '–', '—', '|', ':')
     }
 
     fun normalizar(raw: String): String {
@@ -327,15 +248,12 @@ class MusicaEngine(private val context: Context) {
                     }
                 }
 
-                // Umbral bajo: solo coincidencias de verdad. Con 40 entraban
-                // títulos parecidos ajenos ("Si estuviera contigo" recibió el
-                // autor de otra obra con el mismo título).
-                if (bestScore >= 75 && bestTitle.isNotBlank()) {
+                if (bestScore > 40 && bestTitle.isNotBlank()) {
                     val coverUrl = if (releaseId != null) "$CAA_API/release/$releaseId/front-250.jpg" else null
                     return@withContext EnrichmentResult(
                         title = bestTitle,
                         artist = if (bestArtist.isNotBlank()) bestArtist else artista,
-                        album = if (bestAlbum.isNotBlank()) bestAlbum else "Descargas",
+                        album = if (bestAlbum.isNotBlank()) bestAlbum else "Samsung Music",
                         coverArtUrl = coverUrl,
                         score = bestScore,
                         releaseId = releaseId,
@@ -365,32 +283,12 @@ class MusicaEngine(private val context: Context) {
         return EnrichmentResult(
             title = title,
             artist = artist,
-            album = "Descargas",
+            album = "YouTube Music",
             coverArtUrl = "https://img.youtube.com/vi/$videoId/hqdefault.jpg",
             score = 65,
             releaseId = null,
             source = "YouTube"
         )
-    }
-
-    /**
-     * Dato de respaldo derivado del título/canal de YouTube (sin red):
-     * "Artista - Título" del nombre, o el canal sin "- Topic". Se usa cuando
-     * MusicBrainz no convence para no "inventar" autores.
-     */
-    fun fallbackFromYouTube(videoId: String, tituloYt: String, canal: String): Pair<String, String> {
-        val limpio = limpiarTexto(tituloYt)
-        val partes = limpio.split(" - ", " – ", " — ", limit = 2)
-        val title = if (partes.size == 2) partes[1].trim() else limpio
-        val artist = if (partes.size == 2) {
-            partes[0].trim()
-        } else {
-            canal.replace(Regex("(?i)\\s*-\\s*topic\\s*$"), "")
-                .replace(Regex("(?i)\\s*(VEVO|oficial|official|music|records?|topic)\\s*"), " ")
-                .trim()
-                .ifBlank { "Artista desconocido" }
-        }
-        return Pair(title, artist)
     }
 
     fun extraerInfoUrl(url: String): Pair<String?, String?> {
@@ -746,7 +644,7 @@ class MusicaEngine(private val context: Context) {
             EnrichmentResult(
                 title = if (partes.size == 2) partes[1].trim() else clean,
                 artist = if (partes.size == 2) partes[0].trim() else channelYt.ifBlank { "YouTube" },
-                album = "Descargas",
+                album = "YouTube Music",
                 coverArtUrl = "https://img.youtube.com/vi/$cleanId/hqdefault.jpg",
                 score = 65,
                 releaseId = null,
@@ -755,12 +653,14 @@ class MusicaEngine(private val context: Context) {
         }
 
         val safeTitle = meta.title.replace(Regex("[^a-zA-Z0-9_ -]"), "_").take(40).trim()
-        // ID CANÓNICO: SIEMPRE los 11 caracteres completos del video, tanto en
-        // el nombre del archivo como en la BD. Antes se usaban solo 6
-        // ("${cleanId.take(6)}"), y al recuperar/reinstalar se creaban filas
-        // yt_ABC123 junto a las yt_ABC123XYZ → la misma canción aparecía dos
-        // veces (una "Artista desconocido" sin portada).
-        val targetFile = File(musicFolder, "${safeTitle}_${cleanId}.m4a")
+        val defaultTargetFile = File(musicFolder, "${safeTitle}_${cleanId.take(6)}.m4a")
+
+        // Buscar si ya existe algún archivo físico en disco para este videoId
+        val existingFile = musicFolder.listFiles()?.firstOrNull { f ->
+            f.isFile && f.length() >= 10_000L &&
+                    (f.name.contains(cleanId) || (cleanId.length >= 6 && f.name.contains(cleanId.take(6))))
+        }
+        val targetFile = existingFile ?: defaultTargetFile
 
         val bytes: Long
         if (!targetFile.exists() || targetFile.length() < 10_000L) {
@@ -779,6 +679,15 @@ class MusicaEngine(private val context: Context) {
             }
         } else {
             bytes = targetFile.length()
+            onProgress(
+                DownloadProgress(
+                    step = "Audio ya disponible en el dispositivo",
+                    percent = 1.0f,
+                    currentSongTitle = meta.title,
+                    bytesDownloaded = bytes,
+                    bytesTotal = bytes
+                )
+            )
         }
 
         // Duración REAL sondeada del archivo descargado
@@ -786,7 +695,7 @@ class MusicaEngine(private val context: Context) {
         val durationMs = if (probedMs > 0) probedMs else 0L
 
         // Letra real (sincronizada) desde LRCLIB usando la duración verdadera
-        val lrcFile = File(musicFolder, "${safeTitle}_${cleanId}.lrc")
+        val lrcFile = File(musicFolder, "${safeTitle}_${cleanId.take(6)}.lrc")
         if (!lrcFile.exists()) {
             val lrc = LrcParser.fetchLrcFromApi(meta.title, meta.artist, durationMs / 1000)
             if (lrc.isNullOrBlank()) {
@@ -881,7 +790,7 @@ class MusicaEngine(private val context: Context) {
                 } catch (e: Exception) {
                     onProgress(
                         DownloadProgress(
-                            step = "Fallo (${index + 1}/$total): ${item.title} — ${e.message ?: "sin detalle"}",
+                            step = "Sin audio disponible: ${item.title}",
                             percent = currentPercent,
                             currentSongTitle = item.title,
                             totalItems = total,
@@ -914,13 +823,30 @@ class MusicaEngine(private val context: Context) {
                 )
             )
         } else if (videoId != null) {
-            onProgress(DownloadProgress(step = "Obteniendo información del video...", percent = 0.05f))
-            val title = obtenerTituloVideo(videoId) ?: "Canción de YouTube"
+            val cleanId = YouTubeAudioDownloader.normalizeVideoId(videoId)
+            onProgress(DownloadProgress(step = "Comprobando si ya existe en la biblioteca...", percent = 0.05f))
+
+            val alreadyDone = isAlreadyDownloaded?.invoke(cleanId) ?: false
+            if (alreadyDone) {
+                onProgress(
+                    DownloadProgress(
+                        step = "Esta canción ya está descargada en tu biblioteca",
+                        percent = 1.0f,
+                        isFinished = true,
+                        totalItems = 1,
+                        currentItemIndex = 1
+                    )
+                )
+                return@withContext emptyList()
+            }
+
+            onProgress(DownloadProgress(step = "Obteniendo información del video...", percent = 0.10f))
+            val title = obtenerTituloVideo(cleanId) ?: "Canción de YouTube"
             val song = try {
-                procesarYGuardarAudio(videoId, title, "YouTube", autoEnriquecer) { p ->
+                procesarYGuardarAudio(cleanId, title, "YouTube", autoEnriquecer) { p ->
                     onProgress(
                         p.copy(
-                            percent = 0.05f + p.percent * 0.9f,
+                            percent = 0.10f + p.percent * 0.85f,
                             totalItems = 1,
                             currentItemIndex = 1
                         )
@@ -945,74 +871,6 @@ class MusicaEngine(private val context: Context) {
         }
 
         downloadedSongs
-    }
-
-    /**
-     * Escanea la carpeta elegida por el usuario vía SAF (estilo Samsung Music)
-     * con documentFile de androidx. Recorre la carpeta y sus subcarpetas hasta
-     * 2 niveles. Los archivos ya conocidos (por tamaño) no se re-proban.
-     */
-    suspend fun scanUserFolder(
-        treeUriString: String,
-        knownFileSizes: Map<Long, Long> = emptyMap()
-    ): List<Song> = withContext(Dispatchers.IO) {
-        val recovered = mutableListOf<Song>()
-        try {
-            val treeUri = android.net.Uri.parse(treeUriString)
-            val root = androidx.documentfile.provider.DocumentFile.fromTreeUri(context, treeUri)
-                ?: return@withContext recovered
-
-            val pending = ArrayDeque<Pair<androidx.documentfile.provider.DocumentFile, Int>>()
-            pending.add(root to 0)
-            val seenUris = mutableSetOf<String>()
-
-            while (pending.isNotEmpty()) {
-                val (dir, depth) = pending.removeFirst()
-                val children = dir.listFiles()
-                for (child in children) {
-                    if (!seenUris.add(child.uri.toString())) continue
-                    if (child.isDirectory) {
-                        if (depth < 2) pending.add(child to depth + 1)
-                        continue
-                    }
-                    val name = child.name ?: continue
-                    val isAudio = name.endsWith(".m4a") || name.endsWith(".mp3") || name.endsWith(".wav")
-                    if (!isAudio || child.length() <= 10_000L) continue
-
-                    val (videoId, cleanTitle) = parseMediaFileName(name.substringBeforeLast('.'))
-                    val cleanId = videoId
-                    val id = if (cleanId != null) "yt_$cleanId" else "local_${child.uri.hashCode()}"
-
-                    val probedMs = if (knownFileSizes[child.length()] != null) -1L else
-                        YouTubeAudioDownloader.probeDurationMs(child.uri.toString())
-                    val lrcDoc = dir.findFile("${name.substringBeforeLast('.')}.lrc")
-                    val lrcPath = if (lrcDoc != null && lrcDoc.length() > 0) lrcDoc.uri.toString() else null
-
-                    recovered.add(
-                        Song(
-                            id = id,
-                            title = cleanTitle.ifBlank { "Canción descargada" },
-                            artist = "Artista desconocido",
-                            album = "Descargas",
-                            durationMs = if (probedMs > 0) probedMs else 180000L,
-                            filePath = child.uri.toString(),
-                            fileSizeBytes = child.length(),
-                            coverArtUrl = cleanId?.let { "https://img.youtube.com/vi/$it/hqdefault.jpg" },
-                            dateAdded = child.lastModified(),
-                            enrichmentScore = 80,
-                            lrcFilePath = lrcPath,
-                            isDownloaded = true,
-                            bitrate = "320 kbps",
-                            youtubeVideoId = cleanId,
-                            youtubeChannel = "YouTube"
-                        )
-                    )
-                }
-            }
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
-        recovered
     }
 
     fun limpiarCarpeta(canciones: List<Song>): Pair<Int, Int> {
