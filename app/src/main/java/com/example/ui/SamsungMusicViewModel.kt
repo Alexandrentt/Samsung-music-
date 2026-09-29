@@ -348,9 +348,31 @@ class SamsungMusicViewModel(application: Application) : AndroidViewModel(applica
         viewModelScope.launch {
             seedInitialMusic()
         }
+        migrateLegacyStorageToPublicMusic()
         recoverExistingSongs()
         autoEnrichExistingSongs()
         observePlaylistForWidget()
+    }
+
+    /**
+     * One-shot: mueve las descargas que vivan en carpetas app-specific
+     * (Android/data, se pierden al desinstalar) al almacenamiento compartido
+     * /Music/SamsungMusic. Es idempotente y no borra nada si falla.
+     */
+    private fun migrateLegacyStorageToPublicMusic() {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val (_, updated) = engine.migrateAppMusicToPublicFolder(
+                    listRowsUnderPath = { prefix -> repository.getSongsUnderPath(prefix) },
+                    updateSongRow = { row -> repository.updateSong(row) }
+                )
+                if (updated > 0) {
+                    android.util.Log.i("SamsungMusic", "Migración a /Music: $updated canciones")
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
     }
 
     /**
@@ -363,10 +385,21 @@ class SamsungMusicViewModel(application: Application) : AndroidViewModel(applica
             try {
                 val recovered = engine.scanAndRecoverExistingSongs()
                 val existing = repository.allSongs.firstOrNull() ?: emptyList()
-                val existingIds = existing.map { it.id }.toSet()
+                val existingById = existing.associateBy { it.id }
                 for (song in recovered) {
-                    if (song.id !in existingIds) {
-                        repository.insertSong(song)
+                    val current = existingById[song.id]
+                    when {
+                        current == null -> repository.insertSong(song)
+                        // La fila existe pero su archivo ya no está: repuntar al
+                        // archivo recuperado sin pisar los metadatos enriquecidos.
+                        !File(current.filePath).isFile && File(song.filePath).isFile ->
+                            repository.updateSong(
+                                current.copy(
+                                    filePath = song.filePath,
+                                    fileSizeBytes = song.fileSizeBytes,
+                                    lrcFilePath = song.lrcFilePath ?: current.lrcFilePath
+                                )
+                            )
                     }
                 }
             } catch (e: Exception) {

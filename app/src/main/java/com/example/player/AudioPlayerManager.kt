@@ -414,7 +414,12 @@ class AudioPlayerManager(private val context: Context) {
         val target = if (song.filePath.isNotBlank()) {
             File(song.filePath)
         } else {
-            val musicFolder = File(context.getExternalFilesDir(Environment.DIRECTORY_MUSIC), "SamsungMusic")
+            // Misma carpeta pública que MusicaEngine (/Music/SamsungMusic):
+            // los archivos on-demand NO deben nacer en Android/data.
+            val musicFolder = File(
+                Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC),
+                "SamsungMusic"
+            )
             musicFolder.mkdirs()
             val safeName = song.title.replace(Regex("[^a-zA-Z0-9._-]"), "_").ifBlank { "song" }
             File(musicFolder, "${safeName}_${song.id}.m4a")

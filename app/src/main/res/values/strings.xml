@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Samsung Music</string>
+    <string name="app_name">Música</string>
     <string name="music_widget_description">Reproductor con controles de reproducción</string>
     <string name="playlist_widget_description">Muestra las canciones de tu lista de reproducción</string>
 </resources>

@@ -22,6 +22,9 @@ interface SongDao {
     @Query("SELECT * FROM songs WHERE youtubeVideoId = :videoId LIMIT 1")
     suspend fun getSongByYoutubeId(videoId: String): Song?
 
+    @Query("SELECT * FROM songs WHERE filePath LIKE :pathPrefix || '%' ORDER BY dateAdded DESC")
+    suspend fun getSongsUnderPath(pathPrefix: String): List<Song>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertSong(song: Song)
 

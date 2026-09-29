@@ -126,7 +126,7 @@ class MusicDownloadService : Service() {
                             ?: Song(
                                 id = songId,
                                 title = diskFile.nameWithoutExtension.substringBeforeLast('_').replace('_', ' ').trim().ifBlank { "Canción" },
-                                artist = "Samsung Music",
+                                artist = "Artista desconocido",
                                 album = "Descargas",
                                 filePath = diskFile.absolutePath,
                                 fileSizeBytes = diskFile.length(),

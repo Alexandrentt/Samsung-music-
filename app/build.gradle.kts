@@ -9,17 +9,24 @@ android {
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.aistudio.samsungmusic.qkrtz"
+        // applicationId estable para toda la historia de la app: NO cambiarlo,
+        // o Android lo trataría como una app distinta (biblioteca y descargas
+        // invisibles para la nueva instalación).
+        applicationId = "com.example"
         minSdk = 24
         targetSdk = 36
-        versionCode = 2
-        versionName = "1.1"
+        versionCode = 15
+        versionName = "2.4"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     signingConfigs {
         create("debugConfig") {
+            // Keystore fijo comprometido en el repo para que TODOS los builds
+            // (locales y de CI) firmen con el mismo certificado. Sin esto,
+            // Android rechazaría el APK nuevo como actualización de la app
+            // ya instalada (firma distinta → "App not installed").
             storeFile = file("${rootDir}/debug.keystore")
             storePassword = "android"
             keyAlias = "androiddebugkey"

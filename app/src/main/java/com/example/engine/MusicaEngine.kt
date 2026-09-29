@@ -3,6 +3,7 @@ package com.example.engine
 import android.content.Context
 import com.example.data.DownloadHistoryItem
 import com.example.data.Song
+import com.example.data.SongMatching
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
@@ -25,18 +26,41 @@ class MusicaEngine(private val context: Context) {
     private val client = OkHttpClient.Builder()
         .connectTimeout(15L, TimeUnit.SECONDS)
         .readTimeout(25L, TimeUnit.SECONDS)
-        .build()
-
-    /**
+        .build()    /**
      * Carpeta de almacenamiento para canciones descargadas.
-     * Utiliza el directorio app-specific garantizado para lectura y escritura
-     * sin errores de Scoped Storage ni permisos EACCES en Android 11+.
+     *
+     * Prioriza la carpeta PÚBLICA /Music/SamsungMusic (almacenamiento compartido,
+     * FUERA de Android/data): los archivos que viven ahí NO se pierden al
+     * desinstalar la app y son recuperados por [scanAndRecoverExistingSongs].
+     * Si el sistema no permite escribir ahí (permisos), hace fallback al
+     * directorio app-specific y luego al interno, garantizando que la descarga
+     * siempre tenga destino válido.
      */
     val musicFolder: File by lazy {
-        val appMusic = context.getExternalFilesDir(Environment.DIRECTORY_MUSIC)
-            ?: File(context.filesDir, "Music")
-        if (!appMusic.exists()) appMusic.mkdirs()
-        appMusic
+        val candidates = mutableListOf<File>()
+        try {
+            candidates.add(
+                File(
+                    Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC),
+                    "SamsungMusic"
+                )
+            )
+        } catch (_: Exception) {}
+        context.getExternalFilesDir(Environment.DIRECTORY_MUSIC)?.let { candidates.add(it) }
+        candidates.add(File(context.filesDir, "Music"))
+
+        // Elige la primera carpeta donde realmente podamos crear archivos.
+        candidates.firstOrNull { dir ->
+            try {
+                if (!dir.exists()) dir.mkdirs()
+                val probe = File(dir, ".write_probe_tmp")
+                val ok = probe.createNewFile()
+                probe.delete()
+                ok
+            } catch (_: Exception) {
+                false
+            }
+        } ?: File(context.filesDir, "Music").apply { mkdirs() }
     }
 
     /**
@@ -63,20 +87,20 @@ class MusicaEngine(private val context: Context) {
 
             for (audioFile in audioFiles) {
                 if (!seenPaths.add(audioFile.absolutePath)) continue
-                val rawName = audioFile.nameWithoutExtension
-                val cleanId = rawName.substringAfterLast('_').take(11)
-                val baseTitle = rawName.substringBeforeLast('_').replace('_', ' ').trim()
-                val id = if (cleanId.isNotBlank() && cleanId.length >= 6) "yt_$cleanId" else "local_${audioFile.name.hashCode()}"
+                // Parsing canónico: evita duplicados con sufijo basura/código.
+                val (parsedId, baseTitle) = parseMediaFileName(audioFile.nameWithoutExtension)
+                val cleanId = parsedId?.take(11).orEmpty()
+                val id = if (cleanId.length == 11) "yt_$cleanId" else "local_${audioFile.name.hashCode()}"
 
                 val probedMs = YouTubeAudioDownloader.probeDurationMs(audioFile.absolutePath)
-                val lrcFile = File(audioFile.parentFile, "${rawName}.lrc")
+                val lrcFile = File(audioFile.parentFile, "${audioFile.nameWithoutExtension}.lrc")
                 val lrcPath = if (lrcFile.exists() && lrcFile.length() > 0) lrcFile.absolutePath else null
 
                 recovered.add(
                     Song(
                         id = id,
                         title = baseTitle.ifBlank { "Canción descargada" },
-                        artist = "Samsung Music",
+                        artist = "Artista desconocido",
                         album = "Descargas",
                         durationMs = if (probedMs > 0) probedMs else 180000L,
                         filePath = audioFile.absolutePath,
@@ -92,7 +116,7 @@ class MusicaEngine(private val context: Context) {
                         isDownloaded = true,
                         bitrate = "320 kbps",
                         youtubeVideoId = if (cleanId.length == 11) cleanId else null,
-                        youtubeChannel = "Samsung Music"
+                        youtubeChannel = "Música"
                     )
                 )
             }
@@ -100,9 +124,139 @@ class MusicaEngine(private val context: Context) {
         recovered
     }
 
+    /**
+     * Migra al almacenamiento COMPARTIDO (/Music/SamsungMusic) todas las canciones
+     * descargadas que aún vivan en carpetas app-specific (Android/data), que se
+     * PIERDEN al desinstalar la app o limpiar sus datos. Solo se ejecuta si la
+     * carpeta pública es escribible; en caso contrario devuelve (0, 0).
+     *
+     * Devuelve (archivos movidos, filas actualizadas).
+     */
+    suspend fun migrateAppMusicToPublicFolder(
+        listRowsUnderPath: suspend (String) -> List<Song>,
+        updateSongRow: suspend (Song) -> Unit
+    ): Pair<Int, Int> = withContext(Dispatchers.IO) {
+        var moved = 0
+        var updated = 0
+        try {
+            val target = musicFolder
+            val publicRoot = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC)
+            val publicRootUsable = try {
+                publicRoot.isDirectory && publicRoot.canWrite()
+            } catch (_: Exception) {
+                false
+            }
+            if (target.absolutePath.startsWith(publicRoot.absolutePath) && !publicRootUsable) {
+                // Destino público declarado pero sin escritura real: no tocar nada.
+                return@withContext Pair(0, 0)
+            }
+
+            val dirs = buildList {
+                context.getExternalFilesDir(Environment.DIRECTORY_MUSIC)?.let { add(it) }
+                context.getExternalFilesDir("Music")?.let { add(it) }
+            }.filter { it.isDirectory }
+            if (dirs.isEmpty()) return@withContext Pair(0, 0)
+            val prefixes = dirs.map { it.absolutePath.trimEnd('/') + "/" }
+
+            val seenPaths = mutableSetOf<String>()
+
+            for (prefix in prefixes) {
+                val rows = listRowsUnderPath(prefix)
+                for (row in rows) {
+                    val f = File(row.filePath)
+                    if (!f.isFile) continue
+                    if (!seenPaths.add(f.absolutePath)) continue
+
+                    var dest = File(target, f.name)
+                    // Evita sobrescribir un archivo distinto con el mismo nombre.
+                    var seq = 1
+                    while (dest.exists() && dest.length() != f.length()) {
+                        dest = File(target, "${f.nameWithoutExtension}_$seq.${f.extension}")
+                        seq++
+                    }
+                    if (dest.exists() && dest.length() == f.length() && dest.length() > 0) {
+                        // Ya existe en destino: solo borrar el origen y repuntar la fila.
+                        f.delete()
+                    } else {
+                        if (!f.renameTo(dest)) {
+                            try {
+                                f.copyTo(dest, overwrite = false)
+                                f.delete()
+                            } catch (e: Exception) {
+                                continue
+                            }
+                        }
+                        moved++
+                    }
+
+                    val lrc = File(f.parentFile, "${f.nameWithoutExtension}.lrc")
+                    var newLrc = row.lrcFilePath
+                    if (lrc.isFile) {
+                        val destLrc = File(target, "${dest.nameWithoutExtension}.lrc")
+                        if (lrc.renameTo(destLrc) || lrc.delete()) {
+                            newLrc = destLrc.absolutePath
+                        }
+                    }
+
+                    updateSongRow(
+                        row.copy(
+                            filePath = dest.absolutePath,
+                            fileSizeBytes = dest.length(),
+                            lrcFilePath = newLrc
+                        )
+                    )
+                    updated++
+                    try {
+                        MediaScannerConnection.scanFile(
+                            context,
+                            arrayOf(dest.absolutePath),
+                            arrayOf("audio/mp4"),
+                            null
+                        )
+                    } catch (_: Exception) {}
+                }
+            }
+            Pair(moved, updated)
+        } catch (e: Exception) {
+            android.util.Log.w("MusicaEngine", "Migración de almacenamiento falló: ${e.message}")
+            Pair(0, 0)
+        }
+    }
+
     data class PlaylistItem(val videoId: String, val title: String, val channel: String)
 
     companion object {
+        /**
+         * Parsing centralizado de nombres de archivo multimedia (causa raíz de los
+         * duplicados con código al final). Devuelve (videoId?, título limpio).
+         * - "Corazon_de_Papel_rY0WqhfEA2w" → ("rY0WqhfEA2w", "Corazon de Papel")
+         * - "Sunsetz 5-rbSNzU" → (null, "Sunsetz") — sufijo basura, ID falso NO
+         * - "Verano 2024" / "Song 2" → (null, título intacto)
+         */
+        fun parseMediaFileName(rawName: String): Pair<String?, String> {
+            val noExt = rawName.substringBeforeLast('.')
+            // 1) ¿Termina en un ID de YouTube canónico (_xxxxxxxxxxx o pegado)?
+            val idMatch = Regex("[ _-]([A-Za-z0-9_-]{11})$").find(noExt)
+            if (idMatch != null) {
+                val maybeId = idMatch.groupValues[1]
+                val looksLikeId = maybeId.any { it.isDigit() } && maybeId.any { it.isLetter() }
+                if (looksLikeId) {
+                    val title = noExt.substring(0, idMatch.range.first)
+                        .replace('_', ' ').replace(Regex("\\s+"), " ").trim()
+                    return Pair(maybeId, title)
+                }
+            }
+            // 2) ID truncado tras guion bajo ("_5rbSNz")
+            val shortMatch = Regex("_([A-Za-z0-9]{4,10})$").find(noExt)
+            if (shortMatch != null && SongMatching.looksLikeHash(shortMatch.groupValues[1])) {
+                val title = noExt.substring(0, shortMatch.range.first).replace('_', ' ').trim()
+                return Pair(null, title)
+            }
+            // 3) Sin ID: título con guiones bajos y sufijo basura opcional
+            val base = noExt.replace('_', ' ')
+            return Pair(null, SongMatching.stripJunkSuffix(base).trim())
+        }
+
         const val PLAYLIST_ID_DEFAULT = "PLCUqyibcwbIAI0E8rbFcKhKMuUP0dfcIj"
         const val PLAYLIST_URL_DEFAULT = "https://youtube.com/playlist?list=PLCUqyibcwbIAI0E8rbFcKhKMuUP0dfcIj&si=CFlp1A7Y_8g4mKEG"
         const val CAA_API = "https://coverartarchive.org"
@@ -883,7 +1037,13 @@ class MusicaEngine(private val context: Context) {
         for (archivo in archivos) {
             if (archivo.isFile && archivo.name.endsWith(".mp3")) {
                 if (!rutasValidas.contains(archivo.absolutePath)) {
-                    if (archivo.delete()) eliminados++
+                    // Carpeta COMPARTIDA: solo borrar MP3 no referenciados que
+                    // parezcan descargas legacy de la app (sufijo con código);
+                    // jamás tocar la música propia del usuario.
+                    val baseName = archivo.nameWithoutExtension
+                    val pareceLegacy = SongMatching.hasJunkSuffix(baseName) ||
+                            Regex("_[A-Za-z0-9]{4,11}$").containsMatchIn(baseName)
+                    if (pareceLegacy && archivo.delete()) eliminados++
                 } else if (patronNum.containsMatchIn(archivo.name)) {
                     val nuevoNombre = patronNum.replace(archivo.name, "")
                     val nuevoArchivo = File(archivo.parentFile, nuevoNombre)
