@@ -69,7 +69,7 @@ jobs:
       - name: Delete in-progress release (if rerun)
         if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || github.event_name == 'workflow_dispatch'
         run: |
-          VERSION="v1.1.${{ github.run_number }}"
+          VERSION="v$(grep -oP 'versionName = "\K[^"]+' app/build.gradle.kts | head -1).${{ github.run_number }}"
           gh release delete "$VERSION" --yes --cleanup-tag 2>/dev/null || true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -77,20 +77,21 @@ jobs:
       - name: Publish APK to GitHub Releases
         if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || github.event_name == 'workflow_dispatch'
         run: |
-          VERSION="v1.1.${{ github.run_number }}"
+          VERSION="v$(grep -oP 'versionName = "\K[^"]+' app/build.gradle.kts | head -1).${{ github.run_number }}"
           FILES="samsung-music.apk"
           if [ -f samsung-music-release.apk ]; then
             FILES="samsung-music.apk samsung-music-release.apk"
           fi
           gh release create "$VERSION" $FILES \
-            --title "Samsung Music $VERSION (Release)" \
-            --notes "APK de Samsung Music (Release) generado automáticamente por GitHub Actions.
+            --title "Música $VERSION" \
+            --notes "APK de Música generado automáticamente por GitHub Actions.
 
-          Novedades y optimizaciones:
-          - Detección inteligente de canciones existentes: evita redescargar temas que ya tenemos en disco o en la biblioteca
-          - Modo aleatorio (shuffle) mejorado sin saltos ni repeticiones erróneas
-          - Pestaña de Artistas restaurada agrupando por similitud (ignorando tildes, espacios y mayúsculas)
-          - Búsqueda por título o autor/artista con salida limpia mediante el botón Atrás" \
+          Novedades:
+          - Actualización en el sitio: misma firma y applicationId, tus canciones NO se pierden
+          - Descargas en la carpeta compartida /Music/SamsungMusic (fuera de Android/data)
+          - Migración automática de canciones antiguas hacia /Music/SamsungMusic
+          - Detección inteligente de canciones existentes y dedupe de duplicados
+          - Interfaz One UI, barra de reproducción persistente y aleatorio real" \
             --latest
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

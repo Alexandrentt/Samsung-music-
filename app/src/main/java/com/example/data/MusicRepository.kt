@@ -66,6 +66,11 @@ class MusicRepository(
         return songDao.getSongByYoutubeId(videoId)
     }
 
+    /** Canciones cuyo filePath está bajo la carpeta dada (migraciones de almacenamiento). */
+    suspend fun getSongsUnderPath(pathPrefix: String): List<Song> {
+        return songDao.getSongsUnderPath(pathPrefix)
+    }
+
     suspend fun insertSong(song: Song) {
         songDao.insertSong(song)
     }
