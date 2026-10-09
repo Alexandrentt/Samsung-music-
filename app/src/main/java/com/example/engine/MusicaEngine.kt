@@ -131,8 +131,8 @@ class MusicaEngine(private val context: Context) {
     /**
      * Migra al almacenamiento COMPARTIDO (/Music/SamsungMusic) todas las canciones
      * descargadas que aún vivan en carpetas app-specific (Android/data), que se
-     * PIERDEN al desinstalar la app o limpiar sus datos. Solo se ejecuta si la
-     * carpeta pública es escribible; en caso contrario devuelve (0, 0).
+     * PIERDEN al desinstalar la app o limpiar sus datos. En Android 10+ usa
+     * MediaStore para escribir de forma compatible con el almacenamiento restringido.
      *
      * Devuelve (archivos movidos, filas actualizadas).
      */
