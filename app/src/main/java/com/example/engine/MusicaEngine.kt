@@ -494,6 +494,33 @@ class MusicaEngine(private val context: Context) {
         )
     }
 
+    /**
+     * Revalida metadatos externos previamente asignados a una canción ya guardada.
+     * Solo se llama explícitamente cuando la fila contiene un releaseId externo;
+     * las ediciones manuales eliminan ese identificador para no ser sobrescritas.
+     */
+    suspend fun revalidarMetadatos(song: Song): Song? = withContext(Dispatchers.IO) {
+        val videoId = song.youtubeVideoId?.takeIf { it.isNotBlank() }
+            ?: song.id.removePrefix("yt_").takeIf { it.length == 11 }
+            ?: return@withContext null
+        val details = obtenerDetallesVideo(videoId) ?: return@withContext null
+        val canonicalTitle = details.title.ifBlank { song.title }
+        val canonicalChannel = details.channel.ifBlank { song.youtubeChannel ?: song.artist }
+        val meta = enriquecerCancion(videoId, canonicalTitle, canonicalChannel, details.durationMs ?: song.durationMs)
+
+        song.copy(
+            title = meta.title,
+            artist = meta.artist,
+            album = meta.album,
+            coverArtUrl = details.thumbnailUrl ?: "https://img.youtube.com/vi/$videoId/hqdefault.jpg",
+            releaseId = meta.releaseId,
+            enrichmentScore = meta.score,
+            youtubeVideoId = videoId,
+            youtubeChannel = canonicalChannel,
+            durationMs = details.durationMs?.takeIf { it > 0L } ?: song.durationMs
+        )
+    }
+
     fun extraerInfoUrl(url: String): Pair<String?, String?> {
         val playlistMatcher = Pattern.compile("[?&]list=([a-zA-Z0-9_-]+)").matcher(url)
         val playlistId = if (playlistMatcher.find()) playlistMatcher.group(1) else null
