@@ -27,6 +27,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -68,6 +70,10 @@ fun MiniPlayerBar(
     } else {
         0f
     }
+    val animatedProgress by animateFloatAsState(
+        targetValue = progress,
+        label = "miniPlayerProgress"
+    )
 
     Box(
         modifier = Modifier
@@ -93,13 +99,31 @@ fun MiniPlayerBar(
                 // Barra de progreso sutil en la parte superior
                 if (currentSong != null) {
                     LinearProgressIndicator(
-                        progress = { progress },
+                        progress = { animatedProgress },
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(2.5.dp),
+                            .height(4.dp),
                         color = MaterialTheme.colorScheme.primary,
                         trackColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f)
                     )
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = formatMiniTime(currentPositionMs),
+                            fontSize = 10.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.weight(1f))
+                        Text(
+                            text = "−${formatMiniTime((durationMs - currentPositionMs).coerceAtLeast(0L))}",
+                            fontSize = 10.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
 
                 Row(
@@ -251,3 +275,10 @@ fun MiniPlayerBar(
     }
 }
 
+
+private fun formatMiniTime(milliseconds: Long): String {
+    val totalSeconds = (milliseconds.coerceAtLeast(0L) / 1000L)
+    val minutes = totalSeconds / 60L
+    val seconds = totalSeconds % 60L
+    return "%d:%02d".format(minutes, seconds)
+}
