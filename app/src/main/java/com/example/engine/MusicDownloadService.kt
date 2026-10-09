@@ -114,12 +114,31 @@ class MusicDownloadService : Service() {
                         }
                     }
 
-                    // 2. Verificar físicamente en la carpeta de música si el archivo ya existe
-                    val files = engine.musicFolder.listFiles()
-                    val diskFile = files?.firstOrNull { f ->
-                        f.isFile && f.length() > 10_000L &&
-                                (f.name.contains(cleanId) || (cleanId.length >= 6 && f.name.contains(cleanId.take(6))))
-                    }
+                    // 2. Buscar el ID completo en la carpeta pública y en las ubicaciones
+                    // antiguas. No comparar solo seis caracteres: puede enlazar otra canción.
+                    val publicDir = File(
+                        android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_MUSIC),
+                        "SamsungMusic"
+                    )
+                    val candidateDirs = listOfNotNull(
+                        publicDir,
+                        engine.musicFolder,
+                        getExternalFilesDir(android.os.Environment.DIRECTORY_MUSIC),
+                        getExternalFilesDir("Music"),
+                        File(filesDir, "Music")
+                    ).distinctBy { it.absolutePath }
+                    val diskFile = candidateDirs.asSequence()
+                        .filter { it.isDirectory }
+                        .flatMap { it.listFiles()?.asSequence() ?: emptySequence() }
+                        .firstOrNull { f ->
+                            f.isFile && f.length() > 10_000L &&
+                                f.extension.lowercase() in setOf("m4a", "mp3", "wav", "ogg", "opus") &&
+                                (
+                                    f.nameWithoutExtension.endsWith("_$cleanId", ignoreCase = true) ||
+                                    f.nameWithoutExtension == cleanId ||
+                                    MusicaEngine.parseMediaFileName(f.nameWithoutExtension).first == cleanId
+                                )
+                        }
 
                     if (diskFile != null) {
                         val songToSave = existingSong?.copy(filePath = diskFile.absolutePath, fileSizeBytes = diskFile.length(), isDownloaded = true)
