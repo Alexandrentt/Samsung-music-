@@ -422,15 +422,16 @@ object YouTubeAudioDownloader {
      * Sondea la duración real del archivo usando MediaPlayer (sin reproducir).
      */
     suspend fun probeDurationMs(filePath: String): Long = withContext(Dispatchers.IO) {
+        var mp: MediaPlayer? = null
         try {
-            val mp = MediaPlayer()
+            mp = MediaPlayer()
             mp.setDataSource(filePath)
             mp.prepare()
-            val duration = mp.duration.toLong()
-            mp.release()
-            if (duration > 0) duration else 0L
-        } catch (e: Exception) {
+            mp.duration.toLong().takeIf { it > 0 } ?: 0L
+        } catch (_: Exception) {
             0L
+        } finally {
+            try { mp?.release() } catch (_: Exception) {}
         }
     }
 
