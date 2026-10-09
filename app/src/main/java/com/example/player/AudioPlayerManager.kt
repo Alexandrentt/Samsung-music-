@@ -163,12 +163,17 @@ class AudioPlayerManager(private val context: Context) {
         notifyForegroundService(_isPlaying.value)
     }
 
-    fun updateCurrentSongMetadata(title: String, artist: String, album: String) {
-        val cur = _currentSong.value ?: return
-        val updated = cur.copy(title = title, artist = artist, album = album)
-        _currentSong.value = updated
-        _queue.value = _queue.value.map { if (it.id == cur.id) updated else it }
-        notifyForegroundService(_isPlaying.value)
+    fun updateCurrentSongMetadata(songId: String, title: String, artist: String, album: String) {
+        val updatedQueue = _queue.value.map { song ->
+            if (song.id == songId) song.copy(title = title, artist = artist, album = album) else song
+        }
+        _queue.value = updatedQueue
+
+        val current = _currentSong.value
+        if (current?.id == songId) {
+            _currentSong.value = current.copy(title = title, artist = artist, album = album)
+            notifyForegroundService(_isPlaying.value)
+        }
     }
 
     fun updateCurrentSongFavorite(isFavorite: Boolean) {
