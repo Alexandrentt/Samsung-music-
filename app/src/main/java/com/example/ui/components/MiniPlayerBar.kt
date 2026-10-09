@@ -38,6 +38,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import java.io.File
 import com.example.R
 import com.example.data.Song
 
@@ -116,7 +117,12 @@ fun MiniPlayerBar(
                     ) {
                         if (displaySong?.coverArtUrl != null) {
                             AsyncImage(
-                                model = displaySong.coverArtUrl,
+                                model = remember(displaySong.coverArtUrl) {
+                                    displaySong.coverArtUrl?.let { path ->
+                                        val localFile = File(path)
+                                        if (localFile.isFile) localFile else path
+                                    }
+                                },
                                 contentDescription = displaySong.title,
                                 modifier = Modifier
                                     .size(48.dp)
