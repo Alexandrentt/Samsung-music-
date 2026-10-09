@@ -993,8 +993,7 @@ class MusicaEngine(private val context: Context) {
                 file.isFile && file.length() >= 10_000L &&
                     file.extension.lowercase(Locale.ROOT) in setOf("m4a", "mp3", "wav", "ogg", "opus") &&
                     (
-                        file.nameWithoutExtension.endsWith("_$cleanId", ignoreCase = true) ||
-                        file.nameWithoutExtension == cleanId ||
+                        file.nameWithoutExtension.contains(cleanId, ignoreCase = true) ||
                         parseMediaFileName(file.nameWithoutExtension).first == cleanId
                     )
             }
