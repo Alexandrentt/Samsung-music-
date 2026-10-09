@@ -100,6 +100,7 @@ fun NowPlayingSheet(
     onOpenSleepTimer: () -> Unit = {},
     sleepTimerRemainingMs: Long? = null,
     onEditCover: (Song) -> Unit = {},
+    onEditMetadata: (Song) -> Unit = {},
     onSelectSongFromQueue: (Song) -> Unit = {},
     onRemoveFromQueue: (String) -> Unit = {},
     onReorderQueue: ((Int, Int) -> Unit)? = null
@@ -532,13 +533,23 @@ fun NowPlayingSheet(
                     )
                 }
 
-                IconButton(onClick = { onToggleFavorite(currentSong) }) {
-                    Icon(
-                        imageVector = if (currentSong.isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
-                        contentDescription = "Favorito",
-                        tint = if (currentSong.isFavorite) Color.Red else MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(28.dp)
-                    )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(onClick = { onEditMetadata(currentSong) }) {
+                        Icon(
+                            imageVector = Icons.Default.Edit,
+                            contentDescription = "Editar título, artista y álbum",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
+                    IconButton(onClick = { onToggleFavorite(currentSong) }) {
+                        Icon(
+                            imageVector = if (currentSong.isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                            contentDescription = "Favorito",
+                            tint = if (currentSong.isFavorite) Color.Red else MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(28.dp)
+                        )
+                    }
                 }
             }
 
