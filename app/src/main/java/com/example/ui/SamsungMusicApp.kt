@@ -57,6 +57,7 @@ import com.example.ui.components.ArtistsTabContent
 import com.example.ui.components.CoverArtEditorDialog
 import com.example.ui.components.DownloadTabContent
 import com.example.ui.components.MiniPlayerBar
+import com.example.ui.components.SongMetadataEditorDialog
 import com.example.ui.components.NowPlayingSheet
 import com.example.ui.components.PlaylistsTabContent
 import com.example.ui.components.SamsungTabs
@@ -136,6 +137,7 @@ fun SamsungMusicApp(viewModel: SamsungMusicViewModel) {
 
     // Estado para personalización del orden de canciones al mantener presionada una canción
     var songToReorder by remember { mutableStateOf<Song?>(null) }
+    var songForMetadataEdit by remember { mutableStateOf<Song?>(null) }
     var isQuickReorderingMode by remember { mutableStateOf(false) }
 
     // Pager para deslizar entre pestañas con el táctil
@@ -172,6 +174,7 @@ fun SamsungMusicApp(viewModel: SamsungMusicViewModel) {
                 sleepTimerRemainingMs = sleepTimerRemainingMs,
                 onShowStats = { viewModel.showStatistics() },
                 onCleanFolder = { viewModel.cleanMusicFolder() },
+                onRescanSongs = { viewModel.rescanSongs() },
                 onEnrichAll = { viewModel.enrichAllSongs(force = true) },
                 onExportCsv = { viewModel.exportToCsv(context) }
             )
@@ -371,6 +374,7 @@ fun SamsungMusicApp(viewModel: SamsungMusicViewModel) {
             onOpenSleepTimer = { viewModel.openSleepTimerDialog() },
             sleepTimerRemainingMs = sleepTimerRemainingMs,
             onEditCover = { viewModel.openCoverArtEditor(it) },
+            onEditMetadata = { songForMetadataEdit = it },
             onSelectSongFromQueue = { song -> viewModel.playerManager.playSong(song, currentQueue) },
             onRemoveFromQueue = { songId -> viewModel.removeFromQueue(songId) },
             onReorderQueue = { fromIdx, toIdx -> viewModel.playerManager.reorderQueue(fromIdx, toIdx) }
@@ -388,6 +392,17 @@ fun SamsungMusicApp(viewModel: SamsungMusicViewModel) {
             onCancelTimer = { viewModel.cancelSleepTimer() },
             onAddMinutes = { viewModel.addSleepTimerMinutes(it) },
             onDismiss = { viewModel.closeSleepTimerDialog() }
+        )
+    }
+
+    songForMetadataEdit?.let { song ->
+        SongMetadataEditorDialog(
+            song = song,
+            onDismiss = { songForMetadataEdit = null },
+            onSave = { title, artist, album ->
+                viewModel.updateSongMetadata(song.id, title, artist, album)
+                songForMetadataEdit = null
+            }
         )
     }
 
