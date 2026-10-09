@@ -872,6 +872,16 @@ class MusicaEngine(private val context: Context) {
         val expectedPath = File(publicDir, source.name)
         if (source.absolutePath == expectedPath.absolutePath && expectedPath.exists()) return expectedPath
 
+        // Si el archivo canónico ya está publicado, reutilizarlo en lugar de
+        // insertar otra fila MediaStore con el mismo audio y otro nombre.
+        if (expectedPath.isFile && expectedPath.length() >= 10_000L &&
+            expectedPath.length() == source.length() &&
+            source.absolutePath != expectedPath.absolutePath
+        ) {
+            source.delete()
+            return expectedPath
+        }
+
         val resolver = context.contentResolver
         val mimeType = when (source.extension.lowercase(Locale.ROOT)) {
             "mp3" -> "audio/mpeg"
@@ -952,14 +962,42 @@ class MusicaEngine(private val context: Context) {
             )
         }
 
-        val safeTitle = meta.title.replace(Regex("[^a-zA-Z0-9_ -]"), "_").take(40).trim()
-        val defaultTargetFile = File(musicFolder, "${safeTitle}_${cleanId.take(6)}.m4a")
+        // Nombre estable y sin parámetros de URL. Usar el ID completo evita que
+        // dos videos con los mismos primeros seis caracteres colisionen.
+        val safeTitle = meta.title
+            .replace(Regex("[^a-zA-Z0-9_ -]"), "_")
+            .replace(Regex("\\s+"), " ")
+            .trim()
+            .take(40)
+            .ifBlank { "Cancion" }
+        val canonicalFileName = "${safeTitle}_${cleanId}.m4a"
+        val defaultTargetFile = File(musicFolder, canonicalFileName)
 
-        // Buscar si ya existe algún archivo físico en disco para este videoId
-        val existingFile = musicFolder.listFiles()?.firstOrNull { f ->
-            f.isFile && f.length() >= 10_000L &&
-                    (f.name.contains(cleanId) || (cleanId.length >= 6 && f.name.contains(cleanId.take(6))))
-        }
+        // Buscar por ID completo en todas las ubicaciones usadas por versiones
+        // anteriores. No usar coincidencias parciales: causaban falsos duplicados.
+        val publicDir = File(
+            Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC),
+            "SamsungMusic"
+        )
+        val candidateDirs = listOfNotNull(
+            publicDir,
+            musicFolder,
+            context.getExternalFilesDir(Environment.DIRECTORY_MUSIC),
+            context.getExternalFilesDir("Music"),
+            File(context.filesDir, "Music")
+        ).distinctBy { it.absolutePath }
+        val existingFile = candidateDirs.asSequence()
+            .filter { it.isDirectory }
+            .flatMap { it.listFiles()?.asSequence() ?: emptySequence() }
+            .firstOrNull { file ->
+                file.isFile && file.length() >= 10_000L &&
+                    file.extension.lowercase(Locale.ROOT) in setOf("m4a", "mp3", "wav", "ogg", "opus") &&
+                    (
+                        file.nameWithoutExtension.endsWith("_$cleanId", ignoreCase = true) ||
+                        file.nameWithoutExtension == cleanId ||
+                        parseMediaFileName(file.nameWithoutExtension).first == cleanId
+                    )
+            }
         var targetFile = existingFile ?: defaultTargetFile
 
         val bytes: Long
@@ -1004,7 +1042,7 @@ class MusicaEngine(private val context: Context) {
         }
 
         // Letra real (sincronizada) desde LRCLIB usando la duración verdadera
-        val lrcFile = File(targetFile.parentFile, "${safeTitle}_${cleanId.take(6)}.lrc")
+        val lrcFile = File(targetFile.parentFile, "${safeTitle}_${cleanId}.lrc")
         if (!lrcFile.exists()) {
             val lrc = LrcParser.fetchLrcFromApi(meta.title, meta.artist, durationMs / 1000)
             if (lrc.isNullOrBlank()) {
@@ -1038,7 +1076,7 @@ class MusicaEngine(private val context: Context) {
             album = meta.album,
             durationMs = durationMs,
             filePath = targetFile.absolutePath,
-            fileSizeBytes = bytes,
+            fileSizeBytes = targetFile.length(),
             coverArtUrl = youtubeDetails?.thumbnailUrl ?: meta.coverArtUrl ?: "https://img.youtube.com/vi/$cleanId/hqdefault.jpg",
             isFavorite = false,
             playCount = 0,
