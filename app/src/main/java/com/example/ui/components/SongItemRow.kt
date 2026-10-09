@@ -15,6 +15,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.DragHandle
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.PlaylistAdd
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.Image
@@ -165,21 +168,23 @@ fun SongItemRow(
                 onDismissRequest = { showMenu = false }
             ) {
                 DropdownMenuItem(
-                    text = { Text("Reproducir a continuación") },
+                    text = { Text("Poner después de la canción actual") },
+                    leadingIcon = { Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp)) },
                     onClick = {
                         showMenu = false
                         onPlayNext()
                     }
                 )
                 DropdownMenuItem(
-                    text = { Text("Añadir a lista de reproducción") },
+                    text = { Text("Añadir a una playlist") },
+                    leadingIcon = { Icon(Icons.Default.PlaylistAdd, contentDescription = null, modifier = Modifier.size(18.dp)) },
                     onClick = {
                         showMenu = false
                         onAddToPlaylist()
                     }
                 )
                 DropdownMenuItem(
-                    text = { Text("Cambiar portada") },
+                    text = { Text("Editar carátula") },
                     leadingIcon = { Icon(Icons.Default.Image, contentDescription = null, modifier = Modifier.size(18.dp)) },
                     onClick = {
                         showMenu = false
@@ -221,7 +226,8 @@ fun SongItemRow(
                     )
                 }
                 DropdownMenuItem(
-                    text = { Text("Eliminar canción") },
+                    text = { Text("Eliminar canción y archivo local") },
+                    leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.error) },
                     onClick = {
                         showMenu = false
                         onDelete()
