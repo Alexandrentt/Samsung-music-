@@ -33,6 +33,8 @@ class AudioPlayerManager(private val context: Context) {
     private val scope = CoroutineScope(Dispatchers.Main)
     private var mediaPlayer: MediaPlayer? = null
     private var progressJob: Job? = null
+    // Evita que una preparación lenta de una canción anterior reemplace la selección más reciente.
+    private var playbackRequestId: Long = 0L
 
     private val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
     private var audioFocusRequest: AudioFocusRequest? = null
@@ -370,52 +372,57 @@ class AudioPlayerManager(private val context: Context) {
     }
 
     private fun playSongInternal(song: Song) {
+        val requestId = ++playbackRequestId
         try {
+            // Detener inmediatamente la pista anterior: la portada nunca debe cambiar
+            // mientras el audio viejo continúa sonando durante la preparación del nuevo.
+            progressJob?.cancel()
+            progressJob = null
+            try {
+                mediaPlayer?.stop()
+            } catch (_: Throwable) {}
+            try {
+                mediaPlayer?.release()
+            } catch (_: Throwable) {}
+            mediaPlayer = null
+            _isPlaying.value = false
+            _currentPositionMs.value = 0L
+            _durationMs.value = song.durationMs.coerceAtLeast(0L)
+
             _currentSong.value = song
             hasCountedHalfPlay = false
             loadLyricsForSong(song)
+            _playbackError.value = if (song.filePath.isBlank()) "Preparando audio…" else null
+            notifyForegroundService(false)
 
-            if (song.filePath.isBlank()) {
-                _playbackError.value = "Preparando audio…"
-                scope.launch(Dispatchers.IO) {
-                    val preparedSong = ensureSongAudioFile(song)
-                    withContext(Dispatchers.Main) {
-                        if (preparedSong != null) {
-                            _currentSong.value = preparedSong
-                            _playbackError.value = null
-                            startPlayback(preparedSong)
-                        } else {
-                            _playbackError.value = "No se pudo preparar el audio para esta canción."
-                            notifyForegroundService(false)
-                        }
-                    }
-                }
+            val file = song.filePath.takeIf { it.isNotBlank() }?.let(::File)
+            if (file != null && file.isFile && file.length() > 1000L) {
+                startPlayback(song)
                 return
             }
 
-            val file = File(song.filePath)
-            if (file.exists() && file.length() > 1000L) {
-                startPlayback(song)
-            } else {
-                // Si el archivo físico aún no está listo o falló anteriormente, se asegura de inmediato
-                _playbackError.value = "Preparando audio…"
-                scope.launch(Dispatchers.IO) {
-                    val preparedSong = ensureSongAudioFile(song)
-                    withContext(Dispatchers.Main) {
-                        if (preparedSong != null) {
-                            _currentSong.value = preparedSong
-                            _playbackError.value = null
-                            startPlayback(preparedSong)
-                        } else {
-                            _playbackError.value = "No se pudo preparar el audio para esta canción."
-                            notifyForegroundService(false)
-                        }
+            scope.launch(Dispatchers.IO) {
+                val preparedSong = ensureSongAudioFile(song)
+                withContext(Dispatchers.Main) {
+                    // Si se eligió otra canción mientras se preparaba esta, descartar el resultado.
+                    if (requestId != playbackRequestId) return@withContext
+                    if (preparedSong != null) {
+                        _currentSong.value = preparedSong
+                        _playbackError.value = null
+                        startPlayback(preparedSong)
+                    } else {
+                        _playbackError.value = "No se pudo preparar el audio para esta canción."
+                        _isPlaying.value = false
+                        notifyForegroundService(false)
                     }
                 }
             }
         } catch (e: Throwable) {
             e.printStackTrace()
-            _playbackError.value = "Error al iniciar canción: ${e.message}"
+            if (requestId == playbackRequestId) {
+                _isPlaying.value = false
+                _playbackError.value = "Error al iniciar canción: ${e.message}"
+            }
         }
     }
 
