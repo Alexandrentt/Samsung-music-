@@ -899,14 +899,18 @@ class MusicaEngine(private val context: Context) {
             }
             resolver.update(uri, published, null, null)
 
-            if (!publicDir.exists() && !publicDir.mkdirs()) {
-                throw IllegalStateException("No se pudo acceder a Música/SamsungMusic")
+            // MediaStore puede cambiar el nombre si ya existe otro archivo con el
+            // mismo nombre. Recuperar el nombre real evita crear un duplicado fuera
+            // del índice multimedia.
+            var publishedName = source.name
+            resolver.query(uri, arrayOf(MediaStore.MediaColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    publishedName = cursor.getString(0)?.takeIf { it.isNotBlank() } ?: source.name
+                }
             }
-            val destination = File(publicDir, source.name)
-            // En Android moderno, las rutas directas a los medios propios se pueden
-            // usar para I/O; MediaStore sigue siendo quien crea/publica el elemento.
+            val destination = File(publicDir, publishedName)
             if (!destination.exists() || destination.length() != source.length()) {
-                source.copyTo(destination, overwrite = true)
+                throw IllegalStateException("Android publicó el audio, pero no se pudo resolver su ruta compartida")
             }
             source.delete()
             return destination
