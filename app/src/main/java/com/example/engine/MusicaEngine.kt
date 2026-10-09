@@ -349,14 +349,23 @@ class MusicaEngine(private val context: Context) {
         return candidatosList
     }
 
-    suspend fun buscarMusicBrainz(artista: String, titulo: String): EnrichmentResult? = withContext(Dispatchers.IO) {
+    /**
+     * Busca metadatos externos con validación conservadora.
+     * El título por sí solo no identifica una canción: títulos cortos como "<3"
+     * deben coincidir también en artista/canal y duración antes de aceptar el match.
+     */
+    suspend fun buscarMusicBrainz(
+        artista: String,
+        titulo: String,
+        youtubeDurationMs: Long = 0L
+    ): EnrichmentResult? = withContext(Dispatchers.IO) {
         try {
             val encodedQuery = if (artista.isNotBlank()) {
                 URLEncoder.encode("recording:\"$titulo\" AND artist:\"$artista\"", "UTF-8")
             } else {
                 URLEncoder.encode("recording:\"$titulo\"", "UTF-8")
             }
-            val url = "$MB_API/recording?query=$encodedQuery&fmt=json&limit=5"
+            val url = "$MB_API/recording?query=$encodedQuery&fmt=json&limit=8"
             val request = Request.Builder()
                 .url(url)
                 .header("User-Agent", "SamsungMusicManager/1.0 (Android-OneUI)")
@@ -365,18 +374,21 @@ class MusicaEngine(private val context: Context) {
             client.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) return@withContext null
                 val body = response.body?.string() ?: return@withContext null
-                val json = JSONObject(body)
-                val recordings = json.optJSONArray("recordings") ?: return@withContext null
+                val recordings = JSONObject(body).optJSONArray("recordings") ?: return@withContext null
 
-                var bestScore = 0
+                val sourceTitle = normalizar(titulo).replace(Regex("[^\\p{L}\\p{N}]"), "")
+                val isShortTitle = sourceTitle.length <= 3
+                var bestScore = -1
                 var bestTitle = ""
                 var bestArtist = ""
                 var bestAlbum = ""
                 var releaseId: String? = null
 
                 for (i in 0 until recordings.length()) {
-                    val rec = recordings.getJSONObject(i)
-                    val recTitle = rec.optString("title", "")
+                    val rec = recordings.optJSONObject(i) ?: continue
+                    val recTitle = rec.optString("title", "").trim()
+                    if (recTitle.isBlank()) continue
+
                     val artistCredit = rec.optJSONArray("artist-credit")
                     val artistsList = mutableListOf<String>()
                     if (artistCredit != null) {
@@ -387,31 +399,57 @@ class MusicaEngine(private val context: Context) {
                             }
                         }
                     }
-                    val recArtist = artistsList.joinToString(", ")
-                    val score = ((fuzzyRatio(titulo, recTitle) * 0.6) +
-                            ((if (artista.isNotBlank()) fuzzyRatio(artista, recArtist) else 100) * 0.4)).toInt()
+                    val recArtist = artistsList.joinToString(", ").trim()
+                    val titleKey = normalizar(recTitle).replace(Regex("[^\\p{L}\\p{N}]"), "")
+                    val titleScore = fuzzyRatio(titulo, recTitle)
+                    val artistScore = if (artista.isNotBlank() && recArtist.isNotBlank()) {
+                        fuzzyRatio(artista, recArtist)
+                    } else 0
+                    val recordingLengthMs = rec.optLong("length", 0L)
+                    val durationKnown = youtubeDurationMs > 0L && recordingLengthMs > 0L
+                    val durationToleranceMs = maxOf(8_000L, (youtubeDurationMs * 0.06).toLong())
+                    val durationMatches = durationKnown &&
+                        kotlin.math.abs(recordingLengthMs - youtubeDurationMs) <= durationToleranceMs
 
+                    // Evita confundir títulos mínimos o símbolos con otro título parecido.
+                    if (isShortTitle && (sourceTitle.isBlank() || sourceTitle != titleKey)) continue
+                    if (!isShortTitle && titleScore < 85) continue
+
+                    if (artista.isNotBlank() && artistScore < 45) continue
+
+                    // Si se conoce la duración del video y la grabación de MusicBrainz,
+                    // la duración tiene que encajar. Sin duración, exigimos coincidencia
+                    // casi exacta y artista compatible; los títulos cortos no se adivinan.
+                    if (durationKnown && !durationMatches) continue
+                    if (!durationKnown) {
+                        if (isShortTitle) continue
+                        if (titleScore < 96 || artistScore < 70) continue
+                    }
+                    if (isShortTitle && (artista.isBlank() || artistScore < 45 || !durationMatches)) continue
+
+                    val score = (titleScore * 0.65 + artistScore * 0.25 +
+                        (if (durationMatches) 100 else 0) * 0.10).toInt()
                     if (score > bestScore) {
                         bestScore = score
                         bestTitle = recTitle
                         bestArtist = recArtist
                         val releases = rec.optJSONArray("releases")
                         if (releases != null && releases.length() > 0) {
-                            val rel = releases.getJSONObject(0)
-                            releaseId = rel.optString("id", null)
-                            bestAlbum = rel.optString("title", "Álbum Desconocido")
+                            val rel = releases.optJSONObject(0)
+                            releaseId = rel?.optString("id")?.takeIf { !it.isNullOrBlank() }
+                            bestAlbum = rel?.optString("title", "Álbum desconocido") ?: "Álbum desconocido"
                         } else {
                             bestAlbum = "Single"
                         }
                     }
                 }
 
-                if (bestScore > 40 && bestTitle.isNotBlank()) {
-                    val coverUrl = if (releaseId != null) "$CAA_API/release/$releaseId/front-250.jpg" else null
+                if (bestScore >= 80 && bestTitle.isNotBlank()) {
+                    val coverUrl = releaseId?.let { "$CAA_API/release/$it/front-250.jpg" }
                     return@withContext EnrichmentResult(
                         title = bestTitle,
-                        artist = if (bestArtist.isNotBlank()) bestArtist else artista,
-                        album = if (bestAlbum.isNotBlank()) bestAlbum else "Samsung Music",
+                        artist = bestArtist.ifBlank { artista },
+                        album = bestAlbum.ifBlank { "Samsung Music" },
                         coverArtUrl = coverUrl,
                         score = bestScore,
                         releaseId = releaseId,
@@ -419,29 +457,34 @@ class MusicaEngine(private val context: Context) {
                     )
                 }
             }
-        } catch (e: Exception) {
-            // ignore network errors
+        } catch (_: Exception) {
+            // Ante una respuesta incompleta o un error de red, conservar YouTube como fuente.
         }
         null
     }
 
-    suspend fun enriquecerCancion(videoId: String, tituloYt: String, canal: String): EnrichmentResult {
+    suspend fun enriquecerCancion(
+        videoId: String,
+        tituloYt: String,
+        canal: String,
+        durationMs: Long = 0L
+    ): EnrichmentResult {
         val candidates = candidatos(tituloYt, canal)
         for (cand in candidates) {
-            val result = buscarMusicBrainz(cand.first, cand.second)
-            if (result != null && result.score >= UMBRAL_CONFIANZA) {
-                return result
-            }
+            val result = buscarMusicBrainz(cand.first, cand.second, durationMs)
+            if (result != null && result.score >= UMBRAL_CONFIANZA) return result
         }
-        // Fallback result
-        val limpio = limpiarTexto(tituloYt)
-        val partes = limpio.split(" - ", limit = 2)
-        val artist = if (partes.size == 2) partes[0].trim() else canal.ifBlank { "Artista Desconocido" }
-        val title = if (partes.size == 2) partes[1].trim() else limpio
+
+        // No se fuerza un artista extraído de un título ambiguo. YouTube es la fuente
+        // canónica si no hay coincidencia externa fuerte.
+        val cleanTitle = limpiarTexto(tituloYt)
+        val parts = cleanTitle.split(Regex("\\s[-–—|:]\\s"), limit = 2)
+        val title = if (parts.size == 2) parts[1].trim() else cleanTitle
+        val artist = if (parts.size == 2) parts[0].trim() else canal.ifBlank { "Artista desconocido" }
         return EnrichmentResult(
-            title = title,
+            title = title.ifBlank { cleanTitle },
             artist = artist,
-            album = "YouTube Music",
+            album = "YouTube",
             coverArtUrl = "https://img.youtube.com/vi/$videoId/hqdefault.jpg",
             score = 65,
             releaseId = null,
@@ -947,7 +990,7 @@ class MusicaEngine(private val context: Context) {
         val canonicalTitle = youtubeDetails?.title?.takeIf { it.isNotBlank() } ?: titleYt
         val canonicalChannel = youtubeDetails?.channel?.takeIf { it.isNotBlank() } ?: channelYt
         val meta = if (autoEnriquecer) {
-            enriquecerCancion(cleanId, canonicalTitle, canonicalChannel)
+            enriquecerCancion(cleanId, canonicalTitle, canonicalChannel, youtubeDetails?.durationMs ?: 0L)
         } else {
             val clean = limpiarTexto(canonicalTitle)
             val partes = clean.split(" - ", limit = 2)
@@ -1076,7 +1119,7 @@ class MusicaEngine(private val context: Context) {
             durationMs = durationMs,
             filePath = targetFile.absolutePath,
             fileSizeBytes = targetFile.length(),
-            coverArtUrl = youtubeDetails?.thumbnailUrl ?: meta.coverArtUrl ?: "https://img.youtube.com/vi/$cleanId/hqdefault.jpg",
+            coverArtUrl = youtubeDetails?.thumbnailUrl ?: "https://img.youtube.com/vi/$cleanId/hqdefault.jpg",
             isFavorite = false,
             playCount = 0,
             dateAdded = System.currentTimeMillis(),
