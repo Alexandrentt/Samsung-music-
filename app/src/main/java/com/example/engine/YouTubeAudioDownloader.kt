@@ -275,12 +275,29 @@ object YouTubeAudioDownloader {
                 temp.delete()
             }
         } catch (e: Exception) {
-            android.util.Log.w("YouTubeAudioDownloader", "Stream de red no disponible ($cleanId: ${e.message}). Activando respaldo armónico de alta fidelidad.")
+            val temp = File(target.parentFile, target.name + ".part")
+            temp.delete()
+
+            // Nunca sustituir una descarga fallida por audio sintético: eso daba
+            // al usuario un archivo válido pero que no contenía la canción solicitada.
+            if (cancelled.get() ||
+                e is InterruptedException ||
+                e is kotlinx.coroutines.CancellationException
+            ) {
+                throw e
+            }
+            android.util.Log.e(
+                "YouTubeAudioDownloader",
+                "No se pudo descargar audio real para $cleanId: ${e.message}",
+                e
+            )
+            throw IllegalStateException(
+                "YouTube no permitió descargar el audio. Inténtalo de nuevo más tarde.",
+                e
+            )
         }
 
-        // Respaldo de alta fidelidad: Genera audio armónico real (RIFF WAV 44.1kHz estéreo)
-        // para que en el emulador el usuario pueda escuchar la música, probar ecualizador, temporizador y notificaciones.
-        return@withContext generateHarmonicAudioTrack(target, cleanId, onProgress)
+        throw IllegalStateException("La descarga terminó sin producir un archivo de audio.")
     }
 
     /**
