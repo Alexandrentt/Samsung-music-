@@ -134,8 +134,7 @@ class MusicDownloadService : Service() {
                             f.isFile && f.length() > 10_000L &&
                                 f.extension.lowercase() in setOf("m4a", "mp3", "wav", "ogg", "opus") &&
                                 (
-                                    f.nameWithoutExtension.endsWith("_$cleanId", ignoreCase = true) ||
-                                    f.nameWithoutExtension == cleanId ||
+                                    f.nameWithoutExtension.contains(cleanId, ignoreCase = true) ||
                                     MusicaEngine.parseMediaFileName(f.nameWithoutExtension).first == cleanId
                                 )
                         }
