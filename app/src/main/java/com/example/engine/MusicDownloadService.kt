@@ -105,10 +105,25 @@ class MusicDownloadService : Service() {
                         ?: repository.getSongByYoutubeId(cleanId)
 
                     if (existingSong != null) {
-                        val file = File(existingSong.filePath)
+                        // Si los metadatos venían de un catálogo externo, volver a
+                        // validarlos con el título, canal y duración del video original.
+                        // Una edición manual elimina releaseId y nunca se sobrescribe.
+                        var songToUse = existingSong
+                        if (existingSong.releaseId != null) {
+                            try {
+                                val refreshed = engine.revalidarMetadatos(existingSong)
+                                if (refreshed != null) {
+                                    repository.updateSong(refreshed)
+                                    songToUse = refreshed
+                                }
+                            } catch (e: Exception) {
+                                android.util.Log.w("MusicDownloadService", "No se pudieron revalidar metadatos", e)
+                            }
+                        }
+                        val file = File(songToUse.filePath)
                         if (file.exists() && file.length() > 10_000L) {
-                            if (!repository.isSongInPlaylist(targetPlaylistId, existingSong.id)) {
-                                repository.addSongToPlaylist(targetPlaylistId, existingSong.id)
+                            if (!repository.isSongInPlaylist(targetPlaylistId, songToUse.id)) {
+                                repository.addSongToPlaylist(targetPlaylistId, songToUse.id)
                             }
                             return@descargarDesdeUrl true
                         }
