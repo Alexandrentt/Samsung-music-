@@ -408,6 +408,83 @@ class SamsungMusicViewModel(application: Application) : AndroidViewModel(applica
         }
     }
 
+    /** Reescaneo manual: incorpora archivos nuevos y repara rutas rotas. */
+    fun rescanSongs() {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val recovered = engine.scanAndRecoverExistingSongs()
+                val existing = repository.allSongs.firstOrNull() ?: emptyList()
+                var added = 0
+                var repaired = 0
+
+                for (found in recovered) {
+                    val videoId = found.youtubeVideoId
+                    val current = existing.firstOrNull { song ->
+                        song.id == found.id ||
+                            (!videoId.isNullOrBlank() && song.youtubeVideoId == videoId) ||
+                            song.filePath == found.filePath
+                    }
+                    when {
+                        current == null -> {
+                            repository.insertSong(found)
+                            added++
+                        }
+                        !File(current.filePath).isFile && File(found.filePath).isFile -> {
+                            repository.updateSong(
+                                current.copy(
+                                    filePath = found.filePath,
+                                    fileSizeBytes = found.fileSizeBytes,
+                                    durationMs = if (found.durationMs > 0L) found.durationMs else current.durationMs,
+                                    lrcFilePath = found.lrcFilePath ?: current.lrcFilePath
+                                )
+                            )
+                            repaired++
+                        }
+                    }
+                }
+                withContext(Dispatchers.Main) {
+                    showFeedbackToast("Biblioteca reescaneada: $added añadidas, $repaired rutas reparadas")
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("SamsungMusic", "Error al reescanear la biblioteca", e)
+                withContext(Dispatchers.Main) {
+                    showFeedbackToast("No se pudo reescanear la biblioteca")
+                }
+            }
+        }
+    }
+
+    /** Guarda los metadatos editados y sincroniza la pista si está sonando. */
+    fun updateSongMetadata(songId: String, title: String, artist: String, album: String) {
+        val cleanTitle = title.trim()
+        val cleanArtist = artist.trim()
+        val cleanAlbum = album.trim()
+        if (cleanTitle.isBlank() || cleanArtist.isBlank()) {
+            showFeedbackToast("El título y el artista no pueden quedar vacíos")
+            return
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val song = repository.getSongById(songId) ?: return@launch
+                val updated = song.copy(
+                    title = cleanTitle,
+                    artist = cleanArtist,
+                    album = cleanAlbum.ifBlank { "Desconocido" }
+                )
+                repository.updateSong(updated)
+                withContext(Dispatchers.Main) {
+                    playerManager.updateCurrentSongMetadata(updated.title, updated.artist, updated.album)
+                    showFeedbackToast("Metadatos actualizados")
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("SamsungMusic", "No se pudieron guardar los metadatos", e)
+                withContext(Dispatchers.Main) {
+                    showFeedbackToast("No se pudieron guardar los metadatos")
+                }
+            }
+        }
+    }
+
     /**
      * Refresca el widget de lista de reproducción cuando cambian los datos.
      * El widget muestra la playlist seleccionada (o la primera con canciones).
