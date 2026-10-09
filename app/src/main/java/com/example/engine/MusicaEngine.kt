@@ -1,6 +1,10 @@
 package com.example.engine
 
+import android.content.ContentValues
 import android.content.Context
+import android.net.Uri
+import android.os.Build
+import android.provider.MediaStore
 import com.example.data.DownloadHistoryItem
 import com.example.data.Song
 import com.example.data.SongMatching
@@ -759,21 +763,156 @@ class MusicaEngine(private val context: Context) {
         items
     }
 
-    private fun obtenerTituloVideo(videoId: String): String? {
-        return try {
-            val url = "https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=$videoId&format=json"
-            val request = Request.Builder().url(url).build()
+    private data class YouTubeDetails(
+        val title: String,
+        val channel: String,
+        val thumbnailUrl: String?,
+        val durationMs: Long?
+    )
+
+    /**
+     * Usa primero videoDetails de la propia página de YouTube. oEmbed queda como
+     * respaldo porque solo devuelve título/autor y no incluye duración ni miniaturas
+     * completas. Los campos se tratan como opcionales: YouTube puede cambiar el HTML.
+     */
+    private fun obtenerDetallesVideo(videoId: String): YouTubeDetails? {
+        try {
+            val url = "https://www.youtube.com/watch?v=$videoId"
+            val request = Request.Builder()
+                .url(url)
+                .header("User-Agent", USER_AGENT)
+                .header("Accept-Language", "es-ES,es;q=0.9,en;q=0.8")
+                .build()
             client.newCall(request).execute().use { response ->
                 if (response.isSuccessful) {
-                    val str = response.body?.string()
-                    if (str != null) {
-                        return JSONObject(str).optString("title", null)
+                    val html = response.body?.string().orEmpty()
+                    val matcher = Pattern.compile(
+                        "ytInitialPlayerResponse\\s*=\\s*(\\{.*?\\})\\s*;",
+                        Pattern.DOTALL
+                    ).matcher(html)
+                    if (matcher.find()) {
+                        val playerJson = JSONObject(matcher.group(1) ?: "{}")
+                        val details = playerJson.optJSONObject("videoDetails")
+                        if (details != null) {
+                            val title = details.optString("title", "").trim()
+                            val channel = details.optString("author", "").trim()
+                            val durationSeconds = details.optString("lengthSeconds", "")
+                                .toLongOrNull()
+                            val thumbs = details.optJSONObject("thumbnail")?.optJSONArray("thumbnails")
+                            val thumbnail = thumbs?.let { arr ->
+                                (arr.length() - 1 downTo 0).firstNotNullOfOrNull { index ->
+                                    arr.optJSONObject(index)?.optString("url")?.takeIf { it.isNotBlank() }
+                                }
+                            }
+                            if (title.isNotBlank()) {
+                                return YouTubeDetails(
+                                    title = title,
+                                    channel = channel.ifBlank { "YouTube" },
+                                    thumbnailUrl = thumbnail,
+                                    durationMs = durationSeconds?.takeIf { it > 0 }?.times(1000L)
+                                )
+                            }
+                        }
                     }
                 }
             }
-            null
         } catch (e: Exception) {
+            android.util.Log.w("MusicaEngine", "No se pudieron leer los detalles de YouTube: ${e.message}")
+        }
+
+        // Respaldo oEmbed: no reemplazar detalles completos si ya se consiguieron.
+        return try {
+            val url = "https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=$videoId&format=json"
+            val request = Request.Builder().url(url).header("User-Agent", USER_AGENT).build()
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) return@use null
+                val json = response.body?.string()?.let(::JSONObject) ?: return@use null
+                val title = json.optString("title", "").trim()
+                if (title.isBlank()) null else YouTubeDetails(
+                    title = title,
+                    channel = json.optString("author_name", "YouTube").ifBlank { "YouTube" },
+                    thumbnailUrl = json.optString("thumbnail_url", "").takeIf { it.isNotBlank() },
+                    durationMs = null
+                )
+            }
+        } catch (_: Exception) {
             null
+        }
+    }
+
+    private fun obtenerTituloVideo(videoId: String): String? =
+        obtenerDetallesVideo(videoId)?.title
+
+    /**
+     * Publica el audio en Music/SamsungMusic para que sea visible para otros
+     * reproductores. Android 10+ requiere MediaStore; escribir directamente en
+     * /storage/emulated/0/Music no es fiable con scoped storage.
+     */
+    private fun publicarEnMusicaCompartida(source: File): File {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            val publicDir = File(
+                Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC),
+                "SamsungMusic"
+            )
+            if (!publicDir.exists() && !publicDir.mkdirs()) {
+                throw IllegalStateException("No se pudo crear la carpeta Música/SamsungMusic")
+            }
+            val destination = File(publicDir, source.name)
+            if (source.absolutePath != destination.absolutePath) {
+                source.copyTo(destination, overwrite = true)
+                source.delete()
+            }
+            return destination
+        }
+
+        val publicDir = File(
+            Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC),
+            "SamsungMusic"
+        )
+        val expectedPath = File(publicDir, source.name)
+        if (source.absolutePath == expectedPath.absolutePath && expectedPath.exists()) return expectedPath
+
+        val resolver = context.contentResolver
+        val mimeType = when (source.extension.lowercase(Locale.ROOT)) {
+            "mp3" -> "audio/mpeg"
+            "wav" -> "audio/wav"
+            "ogg", "opus" -> "audio/ogg"
+            else -> "audio/mp4"
+        }
+        val values = ContentValues().apply {
+            put(MediaStore.MediaColumns.DISPLAY_NAME, source.name)
+            put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
+            put(MediaStore.MediaColumns.RELATIVE_PATH, "Music/SamsungMusic")
+            put(MediaStore.MediaColumns.IS_PENDING, 1)
+        }
+        val uri: Uri = resolver.insert(
+            MediaStore.Audio.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY),
+            values
+        ) ?: throw IllegalStateException("Android no pudo registrar la canción en la biblioteca de música")
+
+        try {
+            resolver.openOutputStream(uri, "w")?.use { output ->
+                source.inputStream().use { input -> input.copyTo(output) }
+            } ?: throw IllegalStateException("No se pudo abrir el archivo de destino de MediaStore")
+            val published = ContentValues().apply {
+                put(MediaStore.MediaColumns.IS_PENDING, 0)
+            }
+            resolver.update(uri, published, null, null)
+
+            if (!publicDir.exists() && !publicDir.mkdirs()) {
+                throw IllegalStateException("No se pudo acceder a Música/SamsungMusic")
+            }
+            val destination = File(publicDir, source.name)
+            // En Android moderno, las rutas directas a los medios propios se pueden
+            // usar para I/O; MediaStore sigue siendo quien crea/publica el elemento.
+            if (!destination.exists() || destination.length() != source.length()) {
+                source.copyTo(destination, overwrite = true)
+            }
+            source.delete()
+            return destination
+        } catch (e: Exception) {
+            try { resolver.delete(uri, null, null) } catch (_: Exception) {}
+            throw e
         }
     }
 
@@ -790,16 +929,19 @@ class MusicaEngine(private val context: Context) {
         onProgress: (DownloadProgress) -> Unit = {}
     ): Song = withContext(Dispatchers.IO) {
         val cleanId = YouTubeAudioDownloader.normalizeVideoId(videoId)
+        val youtubeDetails = obtenerDetallesVideo(cleanId)
+        val canonicalTitle = youtubeDetails?.title?.takeIf { it.isNotBlank() } ?: titleYt
+        val canonicalChannel = youtubeDetails?.channel?.takeIf { it.isNotBlank() } ?: channelYt
         val meta = if (autoEnriquecer) {
-            enriquecerCancion(cleanId, titleYt, channelYt)
+            enriquecerCancion(cleanId, canonicalTitle, canonicalChannel)
         } else {
-            val clean = limpiarTexto(titleYt)
+            val clean = limpiarTexto(canonicalTitle)
             val partes = clean.split(" - ", limit = 2)
             EnrichmentResult(
                 title = if (partes.size == 2) partes[1].trim() else clean,
-                artist = if (partes.size == 2) partes[0].trim() else channelYt.ifBlank { "YouTube" },
-                album = "YouTube Music",
-                coverArtUrl = "https://img.youtube.com/vi/$cleanId/hqdefault.jpg",
+                artist = if (partes.size == 2) partes[0].trim() else canonicalChannel.ifBlank { "YouTube" },
+                album = "YouTube",
+                coverArtUrl = youtubeDetails?.thumbnailUrl ?: "https://img.youtube.com/vi/$cleanId/hqdefault.jpg",
                 score = 65,
                 releaseId = null,
                 source = "YouTube"
@@ -814,7 +956,7 @@ class MusicaEngine(private val context: Context) {
             f.isFile && f.length() >= 10_000L &&
                     (f.name.contains(cleanId) || (cleanId.length >= 6 && f.name.contains(cleanId.take(6))))
         }
-        val targetFile = existingFile ?: defaultTargetFile
+        var targetFile = existingFile ?: defaultTargetFile
 
         val bytes: Long
         if (!targetFile.exists() || targetFile.length() < 10_000L) {
@@ -844,12 +986,21 @@ class MusicaEngine(private val context: Context) {
             )
         }
 
-        // Duración REAL sondeada del archivo descargado
+        // Publica el audio en la colección compartida Música para que lo vean
+        // Samsung Music y otros reproductores incluso en Android 10+.
+        targetFile = publicarEnMusicaCompartida(targetFile)
+
+        // Prioriza la duración del archivo; si el contenedor no puede sondearse,
+        // conserva la duración que YouTube publica en los detalles del video.
         val probedMs = YouTubeAudioDownloader.probeDurationMs(targetFile.absolutePath)
-        val durationMs = if (probedMs > 0) probedMs else 0L
+        val durationMs = when {
+            probedMs > 0 -> probedMs
+            (youtubeDetails?.durationMs ?: 0L) > 0L -> youtubeDetails!!.durationMs!!
+            else -> 0L
+        }
 
         // Letra real (sincronizada) desde LRCLIB usando la duración verdadera
-        val lrcFile = File(musicFolder, "${safeTitle}_${cleanId.take(6)}.lrc")
+        val lrcFile = File(targetFile.parentFile, "${safeTitle}_${cleanId.take(6)}.lrc")
         if (!lrcFile.exists()) {
             val lrc = LrcParser.fetchLrcFromApi(meta.title, meta.artist, durationMs / 1000)
             if (lrc.isNullOrBlank()) {
@@ -864,7 +1015,14 @@ class MusicaEngine(private val context: Context) {
             MediaScannerConnection.scanFile(
                 context,
                 arrayOf(targetFile.absolutePath),
-                arrayOf("audio/mp4"),
+                arrayOf(
+                    when (targetFile.extension.lowercase(Locale.ROOT)) {
+                        "mp3" -> "audio/mpeg"
+                        "wav" -> "audio/wav"
+                        "ogg", "opus" -> "audio/ogg"
+                        else -> "audio/mp4"
+                    }
+                ),
                 null
             )
         } catch (_: Exception) {}
@@ -887,7 +1045,7 @@ class MusicaEngine(private val context: Context) {
             lrcFilePath = lrcFile.absolutePath,
             isDownloaded = true,
             youtubeVideoId = cleanId,
-            youtubeChannel = channelYt
+            youtubeChannel = canonicalChannel
         )
     }
 
