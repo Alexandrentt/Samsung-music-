@@ -359,6 +359,8 @@ class MusicaEngine(private val context: Context) {
         titulo: String,
         youtubeDurationMs: Long = 0L
     ): EnrichmentResult? = withContext(Dispatchers.IO) {
+        // Sin artista/canal de referencia, no aceptar un match externo ambiguo.
+        if (artista.isBlank()) return@withContext null
         try {
             val encodedQuery = if (artista.isNotBlank()) {
                 URLEncoder.encode("recording:\"$titulo\" AND artist:\"$artista\"", "UTF-8")
@@ -415,7 +417,7 @@ class MusicaEngine(private val context: Context) {
                     if (isShortTitle && (sourceTitle.isBlank() || sourceTitle != titleKey)) continue
                     if (!isShortTitle && titleScore < 85) continue
 
-                    if (artista.isNotBlank() && artistScore < 45) continue
+                    if (artistScore < 60) continue
 
                     // Si se conoce la duración del video y la grabación de MusicBrainz,
                     // la duración tiene que encajar. Sin duración, exigimos coincidencia
@@ -425,7 +427,7 @@ class MusicaEngine(private val context: Context) {
                         if (isShortTitle) continue
                         if (titleScore < 96 || artistScore < 70) continue
                     }
-                    if (isShortTitle && (artista.isBlank() || artistScore < 45 || !durationMatches)) continue
+                    if (isShortTitle && (artistScore < 60 || !durationMatches)) continue
 
                     val score = (titleScore * 0.65 + artistScore * 0.25 +
                         (if (durationMatches) 100 else 0) * 0.10).toInt()
