@@ -469,7 +469,9 @@ class SamsungMusicViewModel(application: Application) : AndroidViewModel(applica
                 val updated = song.copy(
                     title = cleanTitle,
                     artist = cleanArtist,
-                    album = cleanAlbum.ifBlank { "Desconocido" }
+                    album = cleanAlbum.ifBlank { "Desconocido" },
+                    releaseId = null,
+                    enrichmentScore = 100
                 )
                 repository.updateSong(updated)
                 withContext(Dispatchers.Main) {
