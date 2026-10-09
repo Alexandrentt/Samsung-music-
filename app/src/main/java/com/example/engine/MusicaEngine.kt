@@ -143,78 +143,80 @@ class MusicaEngine(private val context: Context) {
         var moved = 0
         var updated = 0
         try {
-            val target = musicFolder
+            // Android 10+ bloquea la escritura directa con File en /Music por
+            // scoped storage. Publicar mediante MediaStore permite migrar también
+            // las canciones antiguas que quedaron en Android/data.
             val publicRoot = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC)
-            val publicRootUsable = try {
-                publicRoot.isDirectory && publicRoot.canWrite()
-            } catch (_: Exception) {
-                false
-            }
-            if (target.absolutePath.startsWith(publicRoot.absolutePath) && !publicRootUsable) {
-                // Destino público declarado pero sin escritura real: no tocar nada.
-                return@withContext Pair(0, 0)
-            }
-
+            val publicDir = File(publicRoot, "SamsungMusic")
             val dirs = buildList {
                 context.getExternalFilesDir(Environment.DIRECTORY_MUSIC)?.let { add(it) }
                 context.getExternalFilesDir("Music")?.let { add(it) }
-            }.filter { it.isDirectory }
+                add(File(context.filesDir, "Music"))
+            }.filter { it.isDirectory && !it.absolutePath.startsWith(publicDir.absolutePath) }
             if (dirs.isEmpty()) return@withContext Pair(0, 0)
-            val prefixes = dirs.map { it.absolutePath.trimEnd('/') + "/" }
 
+            val prefixes = dirs.distinctBy { it.absolutePath }
+                .map { it.absolutePath.trimEnd('/') + "/" }
             val seenPaths = mutableSetOf<String>()
 
             for (prefix in prefixes) {
-                val rows = listRowsUnderPath(prefix)
-                for (row in rows) {
-                    val f = File(row.filePath)
-                    if (!f.isFile) continue
-                    if (!seenPaths.add(f.absolutePath)) continue
+                for (row in listRowsUnderPath(prefix)) {
+                    val source = File(row.filePath)
+                    if (!source.isFile || !seenPaths.add(source.absolutePath)) continue
 
-                    var dest = File(target, f.name)
-                    // Evita sobrescribir un archivo distinto con el mismo nombre.
-                    var seq = 1
-                    while (dest.exists() && dest.length() != f.length()) {
-                        dest = File(target, "${f.nameWithoutExtension}_$seq.${f.extension}")
-                        seq++
+                    val destination = try {
+                        publicarEnMusicaCompartida(source)
+                    } catch (e: Exception) {
+                        android.util.Log.w(
+                            "MusicaEngine",
+                            "No se pudo mover ${source.name} a Música/SamsungMusic: ${e.message}"
+                        )
+                        continue
                     }
-                    if (dest.exists() && dest.length() == f.length() && dest.length() > 0) {
-                        // Ya existe en destino: solo borrar el origen y repuntar la fila.
-                        f.delete()
-                    } else {
-                        if (!f.renameTo(dest)) {
-                            try {
-                                f.copyTo(dest, overwrite = false)
-                                f.delete()
-                            } catch (e: Exception) {
-                                continue
+                    if (destination.absolutePath != source.absolutePath) moved++
+
+                    val sourceLrc = File(source.parentFile, "${source.nameWithoutExtension}.lrc")
+                    var newLrcPath = row.lrcFilePath
+                    if (sourceLrc.isFile) {
+                        val destinationLrc = File(
+                            destination.parentFile,
+                            "${destination.nameWithoutExtension}.lrc"
+                        )
+                        try {
+                            if (sourceLrc.absolutePath != destinationLrc.absolutePath) {
+                                if (destinationLrc.exists()) {
+                                    sourceLrc.delete()
+                                } else if (!sourceLrc.renameTo(destinationLrc)) {
+                                    sourceLrc.copyTo(destinationLrc, overwrite = false)
+                                    sourceLrc.delete()
+                                }
                             }
-                        }
-                        moved++
-                    }
-
-                    val lrc = File(f.parentFile, "${f.nameWithoutExtension}.lrc")
-                    var newLrc = row.lrcFilePath
-                    if (lrc.isFile) {
-                        val destLrc = File(target, "${dest.nameWithoutExtension}.lrc")
-                        if (lrc.renameTo(destLrc) || lrc.delete()) {
-                            newLrc = destLrc.absolutePath
+                            newLrcPath = destinationLrc.absolutePath
+                        } catch (e: Exception) {
+                            android.util.Log.w("MusicaEngine", "No se pudo mover la letra: ${e.message}")
                         }
                     }
 
                     updateSongRow(
                         row.copy(
-                            filePath = dest.absolutePath,
-                            fileSizeBytes = dest.length(),
-                            lrcFilePath = newLrc
+                            filePath = destination.absolutePath,
+                            fileSizeBytes = destination.length(),
+                            lrcFilePath = newLrcPath
                         )
                     )
                     updated++
                     try {
                         MediaScannerConnection.scanFile(
                             context,
-                            arrayOf(dest.absolutePath),
-                            arrayOf("audio/mp4"),
+                            arrayOf(destination.absolutePath),
+                            arrayOf(
+                                when (destination.extension.lowercase(Locale.ROOT)) {
+                                    "mp3" -> "audio/mpeg"
+                                    "wav" -> "audio/wav"
+                                    "ogg", "opus" -> "audio/ogg"
+                                    else -> "audio/mp4"
+                                }
+                            ),
                             null
                         )
                     } catch (_: Exception) {}
@@ -223,7 +225,7 @@ class MusicaEngine(private val context: Context) {
             Pair(moved, updated)
         } catch (e: Exception) {
             android.util.Log.w("MusicaEngine", "Migración de almacenamiento falló: ${e.message}")
-            Pair(0, 0)
+            Pair(moved, updated)
         }
     }
 
