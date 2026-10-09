@@ -11,7 +11,6 @@ import android.graphics.Bitmap
 import android.graphics.drawable.BitmapDrawable
 import android.os.Build
 import android.os.IBinder
-import android.widget.RemoteViews
 import androidx.core.app.NotificationCompat
 import coil.Coil
 import coil.request.ImageRequest
@@ -23,6 +22,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import java.io.File
 import kotlinx.coroutines.withContext
 
 class MusicPlaybackService : Service() {
@@ -159,7 +159,7 @@ class MusicPlaybackService : Service() {
         try {
             val imageLoader = Coil.imageLoader(this@MusicPlaybackService)
             val request = ImageRequest.Builder(this@MusicPlaybackService)
-                .data(url)
+                .data(if (File(url).isFile) File(url) else url)
                 .allowHardware(false) // RemoteViews requires software Bitmap
                 .size(240, 150) // Tamaño optimizado para evitar saturar el buffer de Binder IPC (TransactionTooLargeException)
                 .build()
@@ -187,103 +187,48 @@ class MusicPlaybackService : Service() {
             this, 0, openAppIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        val prevIntent = Intent(this, MusicPlaybackService::class.java).apply { action = ACTION_PREV }
-        val prevPendingIntent = PendingIntent.getService(
-            this, 1, prevIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
+        fun servicePendingIntent(requestCode: Int, action: String): PendingIntent {
+            val intent = Intent(this, MusicPlaybackService::class.java).apply { this.action = action }
+            return PendingIntent.getService(
+                this, requestCode, intent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+        }
 
-        val toggleIntent = Intent(this, MusicPlaybackService::class.java).apply { action = ACTION_TOGGLE }
-        val togglePendingIntent = PendingIntent.getService(
-            this, 2, toggleIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-
-        val nextIntent = Intent(this, MusicPlaybackService::class.java).apply { action = ACTION_NEXT }
-        val nextPendingIntent = PendingIntent.getService(
-            this, 3, nextIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-
-        val stopIntent = Intent(this, MusicPlaybackService::class.java).apply { action = ACTION_STOP }
-        val stopPendingIntent = PendingIntent.getService(
-            this, 4, stopIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-
-        val shuffleIntent = Intent(this, MusicPlaybackService::class.java).apply { action = ACTION_SHUFFLE }
-        val shufflePendingIntent = PendingIntent.getService(
-            this, 5, shuffleIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-
-        val favIntent = Intent(this, MusicPlaybackService::class.java).apply { action = ACTION_FAVORITE }
-        val favPendingIntent = PendingIntent.getService(
-            this, 6, favIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-
-        val playPauseIconRes = if (isPlaying) R.drawable.ic_notif_pause_dark else R.drawable.ic_notif_play_dark
-        val favIconRes = if (isFavorite) R.drawable.ic_notif_thumb_up_filled else R.drawable.ic_notif_thumb_up
-
+        val previous = servicePendingIntent(1, ACTION_PREV)
+        val toggle = servicePendingIntent(2, ACTION_TOGGLE)
+        val next = servicePendingIntent(3, ACTION_NEXT)
+        val shuffle = servicePendingIntent(5, ACTION_SHUFFLE)
+        val favorite = servicePendingIntent(6, ACTION_FAVORITE)
+        val playPauseIcon = if (isPlaying) R.drawable.ic_notif_pause_dark else R.drawable.ic_notif_play_dark
+        val favoriteIcon = if (isFavorite) R.drawable.ic_notif_thumb_up_filled else R.drawable.ic_notif_thumb_up
         val maxProgress = 1000
-        val currentProgress = if (durationMs > 0) {
+        val currentProgress = if (durationMs > 0L) {
             ((positionMs.toFloat() / durationMs.toFloat()) * maxProgress).toInt().coerceIn(0, maxProgress)
-        } else {
-            0
-        }
+        } else 0
 
-        // Expanded RemoteViews matching the user screenshot exactly
-        val remoteViewsExpanded = RemoteViews(packageName, R.layout.notification_media_player_expanded).apply {
-            setTextViewText(R.id.notif_song_title, title)
-            setTextViewText(R.id.notif_song_artist, artist)
-            setImageViewResource(R.id.notif_btn_play_pause, playPauseIconRes)
-            setImageViewResource(R.id.notif_btn_favorite, favIconRes)
-            setProgressBar(R.id.notif_progress_bar, maxProgress, currentProgress, false)
-
-            if (artBitmap != null) {
-                setImageViewBitmap(R.id.notif_bg_art, artBitmap)
-            } else {
-                setImageViewResource(R.id.notif_bg_art, R.drawable.bg_notif_gradient)
-            }
-
-            setOnClickPendingIntent(R.id.notif_btn_play_pause, togglePendingIntent)
-            setOnClickPendingIntent(R.id.notif_btn_prev, prevPendingIntent)
-            setOnClickPendingIntent(R.id.notif_btn_next, nextPendingIntent)
-            setOnClickPendingIntent(R.id.notif_btn_close, stopPendingIntent)
-            setOnClickPendingIntent(R.id.notif_btn_shuffle, shufflePendingIntent)
-            setOnClickPendingIntent(R.id.notif_btn_favorite, favPendingIntent)
-            setOnClickPendingIntent(R.id.notif_root, contentPendingIntent)
-        }
-
-        // Collapsed RemoteViews
-        val remoteViewsCollapsed = RemoteViews(packageName, R.layout.notification_media_player).apply {
-            setTextViewText(R.id.notif_song_title, title)
-            setTextViewText(R.id.notif_song_artist, artist)
-            setImageViewResource(R.id.notif_btn_play_pause, playPauseIconRes)
-            setProgressBar(R.id.notif_progress_bar, maxProgress, currentProgress, false)
-
-            if (artBitmap != null) {
-                setImageViewBitmap(R.id.notif_bg_art, artBitmap)
-            } else {
-                setImageViewResource(R.id.notif_bg_art, R.drawable.bg_notif_gradient)
-            }
-
-            setOnClickPendingIntent(R.id.notif_btn_play_pause, togglePendingIntent)
-            setOnClickPendingIntent(R.id.notif_btn_prev, prevPendingIntent)
-            setOnClickPendingIntent(R.id.notif_btn_next, nextPendingIntent)
-            setOnClickPendingIntent(R.id.notif_btn_close, stopPendingIntent)
-            setOnClickPendingIntent(R.id.notif_collapsed_root, contentPendingIntent)
-        }
-
-        val builder = NotificationCompat.Builder(this, CHANNEL_ID)
+        // Android dibuja la notificación multimedia. Las RemoteViews personalizadas
+        // suelen recortarse o recolocarse en Android 12+ y en capas de fabricantes.
+        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_launcher_foreground)
             .setContentTitle(title)
             .setContentText(artist)
             .setContentIntent(contentPendingIntent)
-            .setCustomContentView(remoteViewsCollapsed)
-            .setCustomBigContentView(remoteViewsExpanded)
+            .setLargeIcon(artBitmap)
+            .setCategory(NotificationCompat.CATEGORY_TRANSPORT)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setOngoing(isPlaying)
             .setSilent(true)
+            .setProgress(maxProgress, currentProgress, false)
+            .addAction(R.drawable.ic_notif_prev, "Anterior", previous)
+            .addAction(playPauseIcon, if (isPlaying) "Pausar" else "Reproducir", toggle)
+            .addAction(R.drawable.ic_notif_next, "Siguiente", next)
+            .addAction(R.drawable.ic_notif_shuffle, if (isShuffle) "Aleatorio activado" else "Aleatorio", shuffle)
+            .addAction(favoriteIcon, if (isFavorite) "Favorito" else "Me gusta", favorite)
+            .setStyle(NotificationCompat.MediaStyle().setShowActionsInCompactView(0, 1, 2))
+            .build()
 
-        val notification = builder.build()
         val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
-
         try {
             if (!isForegroundActive) {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -301,31 +246,32 @@ class MusicPlaybackService : Service() {
             }
         } catch (e: Throwable) {
             e.printStackTrace()
-            // Respaldo inmediato sin RemoteViews si el sistema rechaza la vista personalizada
             try {
-                val fallbackBuilder = NotificationCompat.Builder(this, CHANNEL_ID)
+                val fallback = NotificationCompat.Builder(this, CHANNEL_ID)
                     .setSmallIcon(R.drawable.ic_launcher_foreground)
                     .setContentTitle(title)
                     .setContentText(artist)
                     .setContentIntent(contentPendingIntent)
+                    .setLargeIcon(artBitmap)
+                    .setCategory(NotificationCompat.CATEGORY_TRANSPORT)
                     .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
                     .setOngoing(isPlaying)
                     .setSilent(true)
-
-                val fallbackNotification = fallbackBuilder.build()
+                    .setStyle(NotificationCompat.MediaStyle())
+                    .build()
                 if (!isForegroundActive) {
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                         startForeground(
                             NOTIFICATION_ID,
-                            fallbackNotification,
+                            fallback,
                             android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
                         )
                     } else {
-                        startForeground(NOTIFICATION_ID, fallbackNotification)
+                        startForeground(NOTIFICATION_ID, fallback)
                     }
                     isForegroundActive = true
                 } else {
-                    notificationManager?.notify(NOTIFICATION_ID, fallbackNotification)
+                    notificationManager?.notify(NOTIFICATION_ID, fallback)
                 }
             } catch (ex: Throwable) {
                 ex.printStackTrace()
