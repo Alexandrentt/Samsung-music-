@@ -225,7 +225,6 @@ class MusicPlaybackService : Service() {
             .addAction(R.drawable.ic_notif_next, "Siguiente", next)
             .addAction(R.drawable.ic_notif_shuffle, if (isShuffle) "Aleatorio activado" else "Aleatorio", shuffle)
             .addAction(favoriteIcon, if (isFavorite) "Favorito" else "Me gusta", favorite)
-            .setStyle(NotificationCompat.MediaStyle().setShowActionsInCompactView(0, 1, 2))
             .build()
 
         val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
@@ -257,7 +256,6 @@ class MusicPlaybackService : Service() {
                     .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
                     .setOngoing(isPlaying)
                     .setSilent(true)
-                    .setStyle(NotificationCompat.MediaStyle())
                     .build()
                 if (!isForegroundActive) {
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
