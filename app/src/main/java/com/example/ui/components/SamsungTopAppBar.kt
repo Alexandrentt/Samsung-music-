@@ -103,6 +103,15 @@ fun SamsungTopAppBar(
                     )
                 }
 
+                // Acción directa: reescaneo visible sin tener que abrir el menú.
+                IconButton(onClick = onRescanSongs) {
+                    Icon(
+                        imageVector = Icons.Default.Refresh,
+                        contentDescription = "Reescanear biblioteca de canciones",
+                        tint = MaterialTheme.colorScheme.onBackground
+                    )
+                }
+
                 IconButton(onClick = onOpenSleepTimer) {
                     Box(contentAlignment = Alignment.Center) {
                         Icon(
@@ -174,7 +183,7 @@ fun SamsungTopAppBar(
                         }
                     )
                     DropdownMenuItem(
-                        text = { Text("Reescanear canciones") },
+                        text = { Text("Reescanear biblioteca ahora") },
                         leadingIcon = { Icon(Icons.Default.Refresh, contentDescription = null) },
                         onClick = {
                             showMenu = false
