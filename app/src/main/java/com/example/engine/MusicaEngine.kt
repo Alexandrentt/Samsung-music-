@@ -1039,7 +1039,7 @@ class MusicaEngine(private val context: Context) {
             durationMs = durationMs,
             filePath = targetFile.absolutePath,
             fileSizeBytes = bytes,
-            coverArtUrl = meta.coverArtUrl ?: "https://img.youtube.com/vi/$cleanId/hqdefault.jpg",
+            coverArtUrl = youtubeDetails?.thumbnailUrl ?: meta.coverArtUrl ?: "https://img.youtube.com/vi/$cleanId/hqdefault.jpg",
             isFavorite = false,
             playCount = 0,
             dateAdded = System.currentTimeMillis(),
