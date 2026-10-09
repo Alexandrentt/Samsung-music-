@@ -403,7 +403,7 @@ class MusicaEngine(private val context: Context) {
                     }
                     val recArtist = artistsList.joinToString(", ").trim()
                     val titleKey = normalizar(recTitle).replace(Regex("[^\\p{L}\\p{N}]"), "")
-                    val titleScore = fuzzyRatio(titulo, recTitle)
+                    val titleScore = if (isShortTitle) { if (sourceTitle == titleKey) 100 else 0 } else fuzzyRatio(titulo, recTitle)
                     val artistScore = if (artista.isNotBlank() && recArtist.isNotBlank()) {
                         fuzzyRatio(artista, recArtist)
                     } else 0
