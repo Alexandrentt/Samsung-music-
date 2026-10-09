@@ -473,7 +473,7 @@ class SamsungMusicViewModel(application: Application) : AndroidViewModel(applica
                 )
                 repository.updateSong(updated)
                 withContext(Dispatchers.Main) {
-                    playerManager.updateCurrentSongMetadata(updated.title, updated.artist, updated.album)
+                    playerManager.updateCurrentSongMetadata(updated.id, updated.title, updated.artist, updated.album)
                     showFeedbackToast("Metadatos actualizados")
                 }
             } catch (e: Exception) {
