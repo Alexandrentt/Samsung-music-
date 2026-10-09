@@ -86,7 +86,7 @@ class MusicaEngine(private val context: Context) {
         for (folder in foldersToScan.distinctBy { it.absolutePath }) {
             if (!folder.exists() || !folder.isDirectory) continue
             val audioFiles = folder.listFiles { file ->
-                file.isFile && (file.name.endsWith(".m4a") || file.name.endsWith(".mp3") || file.name.endsWith(".wav")) && file.length() > 10_000L
+                file.isFile && file.extension.lowercase(Locale.ROOT) in setOf("m4a", "mp3", "wav", "ogg", "opus") && file.length() > 10_000L
             } ?: emptyArray()
 
             for (audioFile in audioFiles) {
