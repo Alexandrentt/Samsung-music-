@@ -82,8 +82,11 @@ dependencies {
     implementation(libs.okhttp)
     implementation(libs.coil.compose)
 
-    // NewPipeExtractor: descarga real de audio desde YouTube
+    // NewPipeExtractor: resolución del stream de audio
     implementation(libs.newpipe.extractor)
+
+    // Conversión real a MP3 (encoder LAME); no basta con cambiar la extensión.
+    implementation("dev.ffmpegkit-maintained:ffmpeg-kit-audio:8.1.9")
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
