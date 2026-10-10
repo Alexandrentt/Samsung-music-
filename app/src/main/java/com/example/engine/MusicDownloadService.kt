@@ -109,7 +109,7 @@ class MusicDownloadService : Service() {
                         // validarlos con el título, canal y duración del video original.
                         // Una edición manual elimina releaseId y nunca se sobrescribe.
                         var songToUse = existingSong
-                        if (existingSong.releaseId != null) {
+                        if (existingSong.releaseId != null && !existingSong.titleManuallyEdited && !existingSong.artistManuallyEdited && !existingSong.albumManuallyEdited) {
                             try {
                                 val refreshed = engine.revalidarMetadatos(existingSong)
                                 if (refreshed != null) {
@@ -121,7 +121,7 @@ class MusicDownloadService : Service() {
                             }
                         }
                         val file = File(songToUse.filePath)
-                        if (file.exists() && file.length() > 10_000L) {
+                        if (file.exists() && file.length() > 10_000L && file.extension.equals("mp3", ignoreCase = true)) {
                             if (!repository.isSongInPlaylist(targetPlaylistId, songToUse.id)) {
                                 repository.addSongToPlaylist(targetPlaylistId, songToUse.id)
                             }
@@ -147,7 +147,7 @@ class MusicDownloadService : Service() {
                         .flatMap { it.listFiles()?.asSequence() ?: emptySequence() }
                         .firstOrNull { f ->
                             f.isFile && f.length() > 10_000L &&
-                                f.extension.lowercase() in setOf("m4a", "mp3", "wav", "ogg", "opus") &&
+                                f.extension.lowercase() == "mp3" &&
                                 (
                                     f.nameWithoutExtension.contains(cleanId, ignoreCase = true) ||
                                     MusicaEngine.parseMediaFileName(f.nameWithoutExtension).first == cleanId
@@ -166,9 +166,22 @@ class MusicDownloadService : Service() {
                                 isDownloaded = true,
                                 youtubeVideoId = cleanId
                             )
-                        repository.insertSong(songToSave)
-                        if (!repository.isSongInPlaylist(targetPlaylistId, songToSave.id)) {
-                            repository.addSongToPlaylist(targetPlaylistId, songToSave.id)
+                        val previous = repository.getSongById(songToSave.id)
+                            ?: repository.getSongByYoutubeId(cleanId)
+                        val safeToSave = if (previous == null) songToSave else songToSave.copy(
+                            title = if (previous.titleManuallyEdited) previous.title else songToSave.title,
+                            artist = if (previous.artistManuallyEdited) previous.artist else songToSave.artist,
+                            album = if (previous.albumManuallyEdited) previous.album else songToSave.album,
+                            titleManuallyEdited = previous.titleManuallyEdited,
+                            artistManuallyEdited = previous.artistManuallyEdited,
+                            albumManuallyEdited = previous.albumManuallyEdited,
+                            isFavorite = previous.isFavorite,
+                            playCount = previous.playCount,
+                            dateAdded = previous.dateAdded
+                        )
+                        repository.insertSong(safeToSave)
+                        if (!repository.isSongInPlaylist(targetPlaylistId, safeToSave.id)) {
+                            repository.addSongToPlaylist(targetPlaylistId, safeToSave.id)
                         }
                         return@descargarDesdeUrl true
                     }
@@ -176,9 +189,22 @@ class MusicDownloadService : Service() {
                     false
                 },
                 onSongSaved = { song ->
-                    repository.insertSong(song)
-                    repository.recordDownload(song.youtubeVideoId ?: song.id, song.title, song.artist, song.filePath)
-                    repository.addSongToPlaylist(targetPlaylistId, song.id)
+                    val previous = repository.getSongById(song.id)
+                        ?: song.youtubeVideoId?.let { repository.getSongByYoutubeId(it) }
+                    val safeToSave = if (previous == null) song else song.copy(
+                        title = if (previous.titleManuallyEdited) previous.title else song.title,
+                        artist = if (previous.artistManuallyEdited) previous.artist else song.artist,
+                        album = if (previous.albumManuallyEdited) previous.album else song.album,
+                        titleManuallyEdited = previous.titleManuallyEdited,
+                        artistManuallyEdited = previous.artistManuallyEdited,
+                        albumManuallyEdited = previous.albumManuallyEdited,
+                        isFavorite = previous.isFavorite,
+                        playCount = previous.playCount,
+                        dateAdded = previous.dateAdded
+                    )
+                    repository.insertSong(safeToSave)
+                    repository.recordDownload(safeToSave.youtubeVideoId ?: safeToSave.id, safeToSave.title, safeToSave.artist, safeToSave.filePath)
+                    repository.addSongToPlaylist(targetPlaylistId, safeToSave.id)
                 },
                 onProgress = { progress ->
                     _downloadProgress.value = progress
