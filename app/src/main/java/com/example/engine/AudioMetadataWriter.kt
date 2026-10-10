@@ -99,10 +99,11 @@ object AudioMetadataWriter {
                     } else {
                         backupFile.copyTo(audioFile, overwrite = true)
                     }
+                    backupReady = false
                 } catch (restoreError: Exception) {
                     // Conservar el respaldo en caché si la restauración no fue posible.
                     Log.e(TAG, "El original sigue respaldado en ${backupFile.absolutePath}", restoreError)
-                    backupReady = false
+                    backupReady = true
                 }
             }
             return false
@@ -120,7 +121,7 @@ object AudioMetadataWriter {
             val root = musicRoot.canonicalFile.toPath()
             val targetParent = file.parentFile?.canonicalFile?.toPath() ?: return null
             if (!targetParent.startsWith(root)) return null
-            root.relativize(targetParent).toString().replace(File.separatorChar, '/') + "/"
+            Environment.DIRECTORY_MUSIC + "/" + root.relativize(targetParent).toString().replace(File.separatorChar, '/') + "/"
         } catch (_: Exception) {
             return null
         }
