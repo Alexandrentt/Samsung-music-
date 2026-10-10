@@ -471,7 +471,10 @@ class SamsungMusicViewModel(application: Application) : AndroidViewModel(applica
                     artist = cleanArtist,
                     album = cleanAlbum.ifBlank { "Desconocido" },
                     releaseId = null,
-                    enrichmentScore = 100
+                    enrichmentScore = 100,
+                    titleManuallyEdited = true,
+                    artistManuallyEdited = true,
+                    albumManuallyEdited = true
                 )
                 repository.updateSong(updated)
                 withContext(Dispatchers.Main) {
@@ -515,7 +518,7 @@ class SamsungMusicViewModel(application: Application) : AndroidViewModel(applica
             }
             if (songs.isEmpty()) return@launch
 
-            val pending = songs.filter { it.enrichmentScore < 70 || it.album == "YouTube Downloads" }
+            val pending = songs.filter { !it.titleManuallyEdited && !it.artistManuallyEdited && !it.albumManuallyEdited && (it.enrichmentScore < 70 || it.album == "YouTube Downloads") }
             if (pending.isEmpty()) return@launch
 
             val total = pending.size
@@ -900,7 +903,7 @@ class SamsungMusicViewModel(application: Application) : AndroidViewModel(applica
             _enrichProgress.value = Pair(0, total)
 
             for (s in songs) {
-                if (force || s.enrichmentScore < 70) {
+                if (!s.titleManuallyEdited && !s.artistManuallyEdited && !s.albumManuallyEdited && (force || s.enrichmentScore < 70)) {
                     val result = engine.buscarMusicBrainz(s.artist, s.title)
                     if (result != null) {
                         repository.updateMetadata(
