@@ -479,9 +479,39 @@ class SamsungMusicViewModel(application: Application) : AndroidViewModel(applica
                     albumManuallyEdited = true
                 )
                 repository.updateSong(updated)
+
+                // Sincronizar también las etiquetas del archivo MP3, para que
+                // el título/artista/álbum no existan únicamente dentro de la app.
+                val audioFile = File(updated.filePath)
+                val embeddedTags = if (
+                    audioFile.isFile && audioFile.extension.equals("mp3", ignoreCase = true)
+                ) {
+                    val lyrics = try {
+                        updated.lrcFilePath
+                            ?.let { File(it) }
+                            ?.takeIf { it.isFile && it.length() > 0L }
+                            ?.readText(Charsets.UTF_8)
+                            ?: updated.lyricsLrc
+                    } catch (_: Exception) {
+                        updated.lyricsLrc
+                    }
+                    com.example.engine.AudioMetadataWriter.writeTags(
+                        audioFile,
+                        updated.title,
+                        updated.artist,
+                        updated.album,
+                        lyrics
+                    )
+                } else null
+
                 withContext(Dispatchers.Main) {
                     playerManager.updateCurrentSongMetadata(updated.id, updated.title, updated.artist, updated.album)
-                    showFeedbackToast("Metadatos actualizados")
+                    val message = when (embeddedTags) {
+                        true -> "Metadatos guardados en la app y dentro del MP3"
+                        false -> "Metadatos guardados en la app, pero no se pudieron escribir dentro del MP3"
+                        null -> "Metadatos actualizados en la app"
+                    }
+                    showFeedbackToast(message)
                 }
             } catch (e: Exception) {
                 android.util.Log.e("SamsungMusic", "No se pudieron guardar los metadatos", e)
