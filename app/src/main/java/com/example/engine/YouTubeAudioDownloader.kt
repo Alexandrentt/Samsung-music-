@@ -349,7 +349,7 @@ object YouTubeAudioDownloader {
                 e
             )
             throw IllegalStateException(
-                "No se pudo descargar y convertir esta canción a MP3. No se guardó un archivo falso.",
+                "No se pudo validar la descarga como MP3. No se guardó el archivo para evitar una canción dañada o con formato incorrecto.",
                 e
             )
         } finally {
