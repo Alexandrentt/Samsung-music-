@@ -1189,6 +1189,7 @@ class MusicaEngine(private val context: Context) {
             lrcFile.takeIf { it.isFile && it.length() > 0L }?.readText(Charsets.UTF_8)
         } catch (_: Exception) { null }
         if (!AudioMetadataWriter.writeTags(
+                context,
                 targetFile,
                 meta.title,
                 meta.artist,
