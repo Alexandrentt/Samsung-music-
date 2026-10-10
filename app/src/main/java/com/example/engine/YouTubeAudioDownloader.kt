@@ -1,5 +1,7 @@
 package com.example.engine
 
+import com.arthenica.ffmpegkit.FFmpegKit
+import com.arthenica.ffmpegkit.ReturnCode
 import android.content.Context
 import android.media.MediaPlayer
 import kotlinx.coroutines.Dispatchers
@@ -221,6 +223,11 @@ object YouTubeAudioDownloader {
      * armónico para que la canción quede disponible en disco y sea reproducible al 100%.
      * Devuelve el número total de bytes escritos.
      */
+    /**
+     * Descarga el stream original a un archivo temporal y lo convierte de verdad
+     * a MP3 con LAME. Nunca guarda bytes M4A/Opus bajo una extensión .mp3.
+     * Devuelve el tamaño del MP3 final.
+     */
     suspend fun downloadToFile(
         videoId: String,
         context: Context,
@@ -229,75 +236,135 @@ object YouTubeAudioDownloader {
         onProgress: (bytesWritten: Long, totalBytes: Long) -> Unit = { _, _ -> }
     ): Long = withContext(Dispatchers.IO) {
         val cleanId = normalizeVideoId(videoId)
+        val parent = target.parentFile ?: throw IllegalStateException("La carpeta de destino no existe")
+        if (!parent.exists() && !parent.mkdirs()) {
+            throw IllegalStateException("No se pudo crear la carpeta de descargas")
+        }
 
-        // Intento 1: Descarga real de stream en línea
+        val source = File(parent, target.nameWithoutExtension + ".source")
+        val partial = File(parent, target.nameWithoutExtension + ".download.part")
+        val encoded = File(parent, target.nameWithoutExtension + ".encoded.mp3")
+
         try {
-            initIfNeeded(context)
-            val resolved = resolveAudio(cleanId, context)
+            source.delete()
+            partial.delete()
+            encoded.delete()
 
+            val resolved = resolveAudio(cleanId, context)
             val request = okhttp3.Request.Builder()
                 .url(resolved.streamUrl)
                 .header("User-Agent", MusicaEngine.USER_AGENT)
                 .build()
 
-            val temp = File(target.parentFile, target.name + ".part")
             var written = 0L
-
-            http.newCall(request).execute().use { resp ->
-                if (!resp.isSuccessful) {
-                    throw IllegalStateException("El servidor respondió ${resp.code}")
+            var total = resolved.contentLengthBytes
+            http.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) {
+                    throw IllegalStateException("El servidor respondió ${response.code}")
                 }
-                val total = resp.body?.contentLength() ?: resolved.contentLengthBytes
-                resp.body?.byteStream()?.use { input ->
-                    FileOutputStream(temp).use { output ->
+                val body = response.body ?: throw IllegalStateException("Respuesta sin audio")
+                if (body.contentLength() > 0L) total = body.contentLength()
+                body.byteStream().use { input ->
+                    FileOutputStream(partial).use { output ->
                         val buffer = ByteArray(64 * 1024)
                         while (true) {
                             if (cancelled.get()) throw InterruptedException("Descarga cancelada")
-                            val read = input.read(buffer)
-                            if (read == -1) break
-                            output.write(buffer, 0, read)
-                            written += read
-                            if (total > 0) onProgress(written, total)
+                            val count = input.read(buffer)
+                            if (count < 0) break
+                            output.write(buffer, 0, count)
+                            written += count
+                            if (total > 0L) onProgress(written, total)
                         }
-                        output.flush()
+                        output.fd.sync()
                     }
-                } ?: throw IllegalStateException("Respuesta sin cuerpo")
-            }
-
-            if (written >= 10_000L) {
-                if (target.exists()) target.delete()
-                if (!temp.renameTo(target)) {
-                    temp.copyTo(target, overwrite = true)
-                    temp.delete()
                 }
-                return@withContext written
-            } else {
-                temp.delete()
             }
-        } catch (e: Exception) {
-            val temp = File(target.parentFile, target.name + ".part")
-            temp.delete()
 
-            // Nunca sustituir una descarga fallida por audio sintético: eso daba
-            // al usuario un archivo válido pero que no contenía la canción solicitada.
-            if (cancelled.get() ||
-                e is InterruptedException ||
-                e is kotlinx.coroutines.CancellationException
+            if (written < 10_000L) {
+                throw IllegalStateException("El audio descargado está vacío o incompleto")
+            }
+            if (!partial.renameTo(source)) {
+                partial.copyTo(source, overwrite = true)
+                partial.delete()
+            }
+            if (cancelled.get()) throw InterruptedException("Descarga cancelada")
+
+            // FFmpeg inspecciona el contenedor de origen y codifica un MP3 real.
+            val session = FFmpegKit.executeWithArguments(
+                arrayOf(
+                    "-y",
+                    "-i", source.absolutePath,
+                    "-map", "0:a:0",
+                    "-vn",
+                    "-codec:a", "libmp3lame",
+                    "-b:a", "192k",
+                    "-id3v2_version", "3",
+                    encoded.absolutePath
+                )
+            )
+            if (!ReturnCode.isSuccess(session.returnCode)) {
+                throw IllegalStateException(
+                    "No se pudo convertir a MP3: ${session.failStackTrace ?: session.returnCode}"
+                )
+            }
+            if (!encoded.isFile || encoded.length() < 10_000L || !looksLikeMp3(encoded)) {
+                throw IllegalStateException("La conversión no produjo un MP3 válido")
+            }
+
+            if (target.exists() && !target.delete()) {
+                throw IllegalStateException("No se pudo reemplazar el archivo de destino")
+            }
+            if (!encoded.renameTo(target)) {
+                encoded.copyTo(target, overwrite = true)
+                encoded.delete()
+            }
+            if (!target.isFile || target.length() < 10_000L || !looksLikeMp3(target)) {
+                target.delete()
+                throw IllegalStateException("El archivo MP3 final no pasó la validación")
+            }
+            onProgress(target.length(), target.length())
+            target.length()
+        } catch (e: Exception) {
+            target.takeIf { it.exists() && it.length() < 10_000L }?.delete()
+            if (e is InterruptedException ||
+                e is kotlinx.coroutines.CancellationException ||
+                cancelled.get()
             ) {
                 throw e
             }
             android.util.Log.e(
                 "YouTubeAudioDownloader",
-                "No se pudo descargar audio real para $cleanId: ${e.message}",
+                "Falló la descarga/conversión MP3 para $cleanId: ${e.message}",
                 e
             )
             throw IllegalStateException(
-                "YouTube no permitió descargar el audio. Inténtalo de nuevo más tarde.",
+                "No se pudo descargar y convertir esta canción a MP3. No se guardó un archivo falso.",
                 e
             )
+        } finally {
+            partial.delete()
+            source.delete()
+            encoded.delete()
         }
+    }
 
-        throw IllegalStateException("La descarga terminó sin producir un archivo de audio.")
+    private fun looksLikeMp3(file: File): Boolean {
+        return try {
+            RandomAccessFile(file, "r").use { input ->
+                if (input.length() < 4L) return false
+                val header = ByteArray(3)
+                input.readFully(header)
+                val hasId3 = header[0] == 'I'.code.toByte() &&
+                    header[1] == 'D'.code.toByte() &&
+                    header[2] == '3'.code.toByte()
+                input.seek(0L)
+                val first = input.read()
+                val second = input.read()
+                hasId3 || (first == 0xFF && second >= 0 && (second and 0xE0) == 0xE0)
+            }
+        } catch (_: Exception) {
+            false
+        }
     }
 
     /**
