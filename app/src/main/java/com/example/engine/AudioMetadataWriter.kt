@@ -118,10 +118,13 @@ object AudioMetadataWriter {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return null
         val musicRoot = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC)
         val relativePath = try {
-            val root = musicRoot.canonicalFile.toPath()
-            val targetParent = file.parentFile?.canonicalFile?.toPath() ?: return null
-            if (!targetParent.startsWith(root)) return null
-            Environment.DIRECTORY_MUSIC + "/" + root.relativize(targetParent).toString().replace(File.separatorChar, '/') + "/"
+            val root = musicRoot.canonicalPath.trimEnd(File.separatorChar)
+            val targetParent = file.parentFile?.canonicalPath ?: return null
+            if (targetParent != root && !targetParent.startsWith(root + File.separator)) return null
+            val relative = targetParent.removePrefix(root)
+                .trimStart(File.separatorChar)
+                .replace(File.separatorChar, '/')
+            Environment.DIRECTORY_MUSIC + if (relative.isBlank()) "/" else "/$relative/"
         } catch (_: Exception) {
             return null
         }
