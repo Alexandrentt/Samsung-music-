@@ -86,7 +86,7 @@ class MusicaEngine(private val context: Context) {
         for (folder in foldersToScan.distinctBy { it.absolutePath }) {
             if (!folder.exists() || !folder.isDirectory) continue
             val audioFiles = folder.listFiles { file ->
-                file.isFile && file.extension.lowercase(Locale.ROOT) in setOf("m4a", "mp3", "wav", "ogg", "opus") && file.length() > 10_000L
+                file.isFile && file.extension.lowercase(Locale.ROOT) == "mp3" && file.length() > 10_000L
             } ?: emptyArray()
 
             for (audioFile in audioFiles) {
@@ -1044,7 +1044,7 @@ class MusicaEngine(private val context: Context) {
             .trim()
             .take(40)
             .ifBlank { "Cancion" }
-        val canonicalFileName = "${safeTitle}_${cleanId}.m4a"
+        val canonicalFileName = "${safeTitle}_${cleanId}.mp3"
         val defaultTargetFile = File(musicFolder, canonicalFileName)
 
         // Buscar por ID completo en todas las ubicaciones usadas por versiones
