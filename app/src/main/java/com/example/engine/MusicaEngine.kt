@@ -241,7 +241,8 @@ class MusicaEngine(private val context: Context) {
                         try { source.delete() } catch (_: Exception) {}
                     }
                     if (lrcCopied && sourceLrc != null &&
-                        sourceLrc.absolutePath != newLrcPath
+                        sourceLrc.absolutePath != newLrcPath &&
+                        sourceLrc.parentFile?.absolutePath == source.parentFile?.absolutePath
                     ) {
                         try { sourceLrc.delete() } catch (_: Exception) {}
                     }
