@@ -1039,8 +1039,8 @@ class MusicaEngine(private val context: Context) {
         // Nombre estable y sin parámetros de URL. Usar el ID completo evita que
         // dos videos con los mismos primeros seis caracteres colisionen.
         val safeTitle = meta.title
-            .replace(Regex("[^\\\\p{L}\\\\p{N}_ -]"), "_")
-            .replace(Regex("[\\\\s_]+"), " ")
+            .replace(Regex("[^\\p{L}\\p{N}_ -]"), "_")
+            .replace(Regex("[\\s_]+"), " ")
             .trim()
             .take(64)
             .ifBlank { "Cancion" }
