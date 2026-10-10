@@ -1039,10 +1039,10 @@ class MusicaEngine(private val context: Context) {
         // Nombre estable y sin parámetros de URL. Usar el ID completo evita que
         // dos videos con los mismos primeros seis caracteres colisionen.
         val safeTitle = meta.title
-            .replace(Regex("[^a-zA-Z0-9_ -]"), "_")
-            .replace(Regex("\\s+"), " ")
+            .replace(Regex("[^\\\\p{L}\\\\p{N}_ -]"), "_")
+            .replace(Regex("[\\\\s_]+"), " ")
             .trim()
-            .take(40)
+            .take(64)
             .ifBlank { "Cancion" }
         val canonicalFileName = "${safeTitle}_${cleanId}.mp3"
         val defaultTargetFile = File(musicFolder, canonicalFileName)
@@ -1065,7 +1065,7 @@ class MusicaEngine(private val context: Context) {
             .flatMap { it.listFiles()?.asSequence() ?: emptySequence() }
             .firstOrNull { file ->
                 file.isFile && file.length() >= 10_000L &&
-                    file.extension.lowercase(Locale.ROOT) in setOf("m4a", "mp3", "wav", "ogg", "opus") &&
+                    file.extension.equals("mp3", ignoreCase = true) &&
                     (
                         file.nameWithoutExtension.contains(cleanId, ignoreCase = true) ||
                         parseMediaFileName(file.nameWithoutExtension).first == cleanId
