@@ -175,6 +175,7 @@ fun SamsungMusicApp(viewModel: SamsungMusicViewModel) {
                 onShowStats = { viewModel.showStatistics() },
                 onCleanFolder = { viewModel.cleanMusicFolder() },
                 onRescanSongs = { viewModel.rescanSongs() },
+                onSyncMissingSongs = { viewModel.syncMissingSongs() },
                 onEnrichAll = { viewModel.enrichAllSongs(force = true) },
                 onExportCsv = { viewModel.exportToCsv(context) }
             )
