@@ -347,11 +347,17 @@ class SamsungMusicViewModel(application: Application) : AndroidViewModel(applica
                 _isDownloading.value = downloading
             }
         }
-        viewModelScope.launch {
-            seedInitialMusic()
+        // Inicialización secuencial: no escanear la carpeta mientras otra
+        // coroutine mueve archivos y cambia las rutas de Room.
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                seedInitialMusic()
+                migrateLegacyStorageToPublicMusic()
+                recoverExistingSongs()
+            } catch (e: Exception) {
+                android.util.Log.e("SamsungMusic", "Falló la inicialización de la biblioteca", e)
+            }
         }
-        migrateLegacyStorageToPublicMusic()
-        recoverExistingSongs()
         autoEnrichExistingSongs()
         observePlaylistForWidget()
     }
@@ -361,19 +367,18 @@ class SamsungMusicViewModel(application: Application) : AndroidViewModel(applica
      * (Android/data, se pierden al desinstalar) al almacenamiento compartido
      * /Music/SamsungMusic. Es idempotente y no borra nada si falla.
      */
-    private fun migrateLegacyStorageToPublicMusic() {
-        viewModelScope.launch(Dispatchers.IO) {
-            try {
-                val (_, updated) = engine.migrateAppMusicToPublicFolder(
-                    listRowsUnderPath = { prefix -> repository.getSongsUnderPath(prefix) },
-                    updateSongRow = { row -> repository.updateSong(row) }
-                )
-                if (updated > 0) {
-                    android.util.Log.i("SamsungMusic", "Migración a /Music: $updated canciones")
-                }
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
+    private suspend fun migrateLegacyStorageToPublicMusic() {
+        try {
+            val (moved, updated) = engine.migrateAppMusicToPublicFolder(
+                listRowsUnderPath = { prefix -> repository.getSongsUnderPath(prefix) },
+                updateSongRow = { row -> repository.updateSong(row) }
+            )
+            android.util.Log.i(
+                "SamsungMusic",
+                "Migración de almacenamiento terminada: $moved archivos movidos, $updated rutas actualizadas"
+            )
+        } catch (e: Exception) {
+            android.util.Log.e("SamsungMusic", "Falló la migración a /Music", e)
         }
     }
 
@@ -382,31 +387,37 @@ class SamsungMusicViewModel(application: Application) : AndroidViewModel(applica
      * público (/Music/SamsungMusic) o interno para que NO se pierdan si el usuario
      * desinstala y reinstala la aplicación.
      */
-    private fun recoverExistingSongs() {
-        viewModelScope.launch(Dispatchers.IO) {
-            try {
-                val recovered = engine.scanAndRecoverExistingSongs()
-                val existing = repository.allSongs.firstOrNull() ?: emptyList()
-                val existingById = existing.associateBy { it.id }
-                for (song in recovered) {
-                    val current = existingById[song.id]
-                    when {
-                        current == null -> repository.insertSong(song)
-                        // La fila existe pero su archivo ya no está: repuntar al
-                        // archivo recuperado sin pisar los metadatos enriquecidos.
-                        (!File(current.filePath).isFile || (File(current.filePath).extension.lowercase() != "mp3" && File(song.filePath).extension.equals("mp3", ignoreCase = true))) && File(song.filePath).isFile ->
-                            repository.updateSong(
-                                current.copy(
-                                    filePath = song.filePath,
-                                    fileSizeBytes = song.fileSizeBytes,
-                                    lrcFilePath = song.lrcFilePath ?: current.lrcFilePath
-                                )
+    private suspend fun recoverExistingSongs() {
+        try {
+            val recovered = engine.scanAndRecoverExistingSongs()
+            val existing = repository.allSongs.firstOrNull() ?: emptyList()
+            val existingById = existing.associateBy { it.id }
+            var added = 0
+            var repaired = 0
+            for (song in recovered) {
+                val current = existingById[song.id]
+                when {
+                    current == null -> {
+                        repository.insertSong(song)
+                        added++
+                    }
+                    // La fila existe pero su archivo ya no está: repuntar al
+                    // archivo recuperado sin pisar los metadatos enriquecidos.
+                    (!File(current.filePath).isFile || (File(current.filePath).extension.lowercase() != "mp3" && File(song.filePath).extension.equals("mp3", ignoreCase = true))) && File(song.filePath).isFile -> {
+                        repository.updateSong(
+                            current.copy(
+                                filePath = song.filePath,
+                                fileSizeBytes = song.fileSizeBytes,
+                                lrcFilePath = song.lrcFilePath ?: current.lrcFilePath
                             )
+                        )
+                        repaired++
                     }
                 }
-            } catch (e: Exception) {
-                e.printStackTrace()
             }
+            android.util.Log.i("SamsungMusic", "Recuperación terminada: $added canciones añadidas, $repaired rutas reparadas")
+        } catch (e: Exception) {
+            android.util.Log.e("SamsungMusic", "Falló la recuperación de canciones existentes", e)
         }
     }
 
