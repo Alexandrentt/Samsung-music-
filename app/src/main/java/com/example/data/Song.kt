@@ -26,7 +26,10 @@ data class Song(
     val playCount: Int = 0,
     val lastPlayedAt: Long? = null,
     val enrichmentScore: Int = 0,
-    val dateAdded: Long = System.currentTimeMillis()
+    val dateAdded: Long = System.currentTimeMillis(),
+    val titleManuallyEdited: Boolean = false,
+    val artistManuallyEdited: Boolean = false,
+    val albumManuallyEdited: Boolean = false
 ) {
     val durationSeconds: Long get() = if (durationMs > 0) durationMs / 1000 else 180L
     val hasLyrics: Boolean get() = !lrcFilePath.isNullOrBlank() || !lyricsLrc.isNullOrBlank()
