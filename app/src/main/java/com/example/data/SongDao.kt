@@ -46,7 +46,7 @@ interface SongDao {
     @Query("UPDATE songs SET coverArtUrl = :coverArtUrl WHERE id = :id")
     suspend fun updateCoverArt(id: String, coverArtUrl: String)
 
-    @Query("UPDATE songs SET title = :title, artist = :artist, album = :album, coverArtUrl = :coverArtUrl, enrichmentScore = :score, releaseId = :releaseId WHERE id = :id")
+    @Query("UPDATE songs SET title = CASE WHEN titleManuallyEdited = 1 THEN title ELSE :title END, artist = CASE WHEN artistManuallyEdited = 1 THEN artist ELSE :artist END, album = CASE WHEN albumManuallyEdited = 1 THEN album ELSE :album END, coverArtUrl = :coverArtUrl, enrichmentScore = :score, releaseId = :releaseId WHERE id = :id")
     suspend fun updateMetadata(
         id: String,
         title: String,
