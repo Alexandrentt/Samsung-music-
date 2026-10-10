@@ -169,42 +169,84 @@ class MusicaEngine(private val context: Context) {
                     } catch (e: Exception) {
                         android.util.Log.w(
                             "MusicaEngine",
-                            "No se pudo mover ${source.name} a Música/SamsungMusic: ${e.message}"
+                            "No se pudo copiar ${source.name} a Música/SamsungMusic; se conserva el original: ${e.message}",
+                            e
                         )
                         continue
                     }
-                    if (destination.absolutePath != source.absolutePath) moved++
 
-                    val sourceLrc = File(source.parentFile, "${source.nameWithoutExtension}.lrc")
+                    // Preferir la ruta LRC registrada en Room; el nombre de la letra
+                    // no siempre coincide con el nombre del MP3.
+                    val sourceLrc = row.lrcFilePath
+                        ?.let { File(it) }
+                        ?.takeIf { it.isFile && it.length() > 0L }
+                        ?: File(source.parentFile, "${source.nameWithoutExtension}.lrc")
+                            .takeIf { it.isFile && it.length() > 0L }
                     var newLrcPath = row.lrcFilePath
-                    if (sourceLrc.isFile) {
+                    var lrcCopied = false
+                    if (sourceLrc != null) {
                         val destinationLrc = File(
                             destination.parentFile,
                             "${destination.nameWithoutExtension}.lrc"
                         )
                         try {
-                            if (sourceLrc.absolutePath != destinationLrc.absolutePath) {
-                                if (destinationLrc.exists()) {
-                                    sourceLrc.delete()
-                                } else if (!sourceLrc.renameTo(destinationLrc)) {
-                                    sourceLrc.copyTo(destinationLrc, overwrite = false)
-                                    sourceLrc.delete()
+                            if (sourceLrc.absolutePath == destinationLrc.absolutePath) {
+                                newLrcPath = destinationLrc.absolutePath
+                                lrcCopied = true
+                            } else {
+                                if (!destinationLrc.isFile || destinationLrc.length() != sourceLrc.length()) {
+                                    sourceLrc.copyTo(destinationLrc, overwrite = true)
+                                }
+                                if (destinationLrc.isFile && destinationLrc.length() == sourceLrc.length()) {
+                                    newLrcPath = destinationLrc.absolutePath
+                                    lrcCopied = true
                                 }
                             }
-                            newLrcPath = destinationLrc.absolutePath
                         } catch (e: Exception) {
-                            android.util.Log.w("MusicaEngine", "No se pudo mover la letra: ${e.message}")
+                            android.util.Log.w(
+                                "MusicaEngine",
+                                "No se pudo verificar la letra de ${source.name}; se conserva el origen",
+                                e
+                            )
                         }
                     }
 
-                    updateSongRow(
-                        row.copy(
-                            filePath = destination.absolutePath,
-                            fileSizeBytes = destination.length(),
-                            lrcFilePath = newLrcPath
+                    // No cambiar la referencia de Room ni borrar el original hasta
+                    // comprobar la copia del audio y poder guardar la nueva ruta.
+                    if (!destination.isFile || destination.length() != source.length()) {
+                        android.util.Log.w("MusicaEngine", "Copia incompleta de ${source.name}; se conserva el original")
+                        continue
+                    }
+                    try {
+                        updateSongRow(
+                            row.copy(
+                                filePath = destination.absolutePath,
+                                fileSizeBytes = destination.length(),
+                                lrcFilePath = if (lrcCopied) newLrcPath else row.lrcFilePath
+                            )
                         )
-                    )
+                    } catch (e: Exception) {
+                        android.util.Log.e(
+                            "MusicaEngine",
+                            "No se pudo actualizar la ruta de ${source.name}; se conserva el original",
+                            e
+                        )
+                        continue
+                    }
+
+                    if (destination.absolutePath != source.absolutePath) {
+                        moved++
+                        // El origen solo se elimina después de que la ruta nueva se
+                        // haya guardado correctamente en Room.
+                        try { source.delete() } catch (_: Exception) {}
+                    }
+                    if (lrcCopied && sourceLrc != null &&
+                        sourceLrc.absolutePath != newLrcPath
+                    ) {
+                        try { sourceLrc.delete() } catch (_: Exception) {}
+                    }
                     updated++
+
                     try {
                         MediaScannerConnection.scanFile(
                             context,
@@ -934,8 +976,12 @@ class MusicaEngine(private val context: Context) {
             val destination = File(publicDir, source.name)
             if (source.absolutePath != destination.absolutePath) {
                 source.copyTo(destination, overwrite = true)
-                source.delete()
+                if (!destination.isFile || destination.length() != source.length()) {
+                    throw IllegalStateException("La copia a Música/SamsungMusic no se pudo verificar")
+                }
             }
+            // No borrar el origen aquí: quien llama debe confirmar primero que
+            // la ruta de la biblioteca y los archivos .lrc ya se actualizaron.
             return destination
         }
 
@@ -952,7 +998,8 @@ class MusicaEngine(private val context: Context) {
             expectedPath.length() == source.length() &&
             source.absolutePath != expectedPath.absolutePath
         ) {
-            source.delete()
+            // La copia de destino ya existe, pero conservar el origen hasta que
+            // la base de datos confirme la nueva ruta.
             return expectedPath
         }
 
@@ -996,7 +1043,8 @@ class MusicaEngine(private val context: Context) {
             if (!destination.exists() || destination.length() != source.length()) {
                 throw IllegalStateException("Android publicó el audio, pero no se pudo resolver su ruta compartida")
             }
-            source.delete()
+            // No borrar el origen aquí. La migración puede fallar al actualizar
+            // Room o trasladar la letra después de publicar el audio.
             return destination
         } catch (e: Exception) {
             try { resolver.delete(uri, null, null) } catch (_: Exception) {}
@@ -1103,7 +1151,15 @@ class MusicaEngine(private val context: Context) {
 
         // Publica el audio en la colección compartida Música para que lo vean
         // Samsung Music y otros reproductores incluso en Android 10+.
-        targetFile = publicarEnMusicaCompartida(targetFile)
+        val downloadedSource = targetFile
+        targetFile = publicarEnMusicaCompartida(downloadedSource)
+        if (downloadedSource.absolutePath != targetFile.absolutePath) {
+            // En descargas nuevas, borrar el temporal solo tras validar que el
+            // archivo compartido existe y tiene exactamente el mismo tamaño.
+            if (targetFile.isFile && targetFile.length() == downloadedSource.length()) {
+                try { downloadedSource.delete() } catch (_: Exception) {}
+            }
+        }
 
         // Prioriza la duración del archivo; si el contenedor no puede sondearse,
         // conserva la duración que YouTube publica en los detalles del video.
