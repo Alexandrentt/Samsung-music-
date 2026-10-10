@@ -1172,14 +1172,34 @@ class MusicaEngine(private val context: Context) {
 
         // Letra real (sincronizada) desde LRCLIB usando la duración verdadera
         val lrcFile = File(targetFile.parentFile, "${safeTitle}_${cleanId}.lrc")
-        if (!lrcFile.exists()) {
+        if (!lrcFile.exists() || lrcFile.length() == 0L) {
             val lrc = LrcParser.fetchLrcFromApi(meta.title, meta.artist, durationMs / 1000)
             if (lrc.isNullOrBlank()) {
-                // Marcador vacío para no reintentar en cada arranque
-                try { lrcFile.createNewFile() } catch (_: Exception) {}
+                // No crear un .lrc vacío: así se podrá volver a intentar obtener
+                // la letra en una próxima sincronización.
+                try { if (lrcFile.exists()) lrcFile.delete() } catch (_: Exception) {}
             } else {
                 LrcParser.saveLrc(lrcFile, lrc)
             }
+        }
+
+        // Guardar título, artista, álbum y letra dentro del MP3 (etiquetas ID3),
+        // además de mantener el .lrc externo para las letras sincronizadas.
+        val lyricsForTags = try {
+            lrcFile.takeIf { it.isFile && it.length() > 0L }?.readText(Charsets.UTF_8)
+        } catch (_: Exception) { null }
+        if (!AudioMetadataWriter.writeTags(
+                targetFile,
+                meta.title,
+                meta.artist,
+                meta.album,
+                lyricsForTags
+            )
+        ) {
+            android.util.Log.w(
+                "MusicaEngine",
+                "El audio se guardó, pero no se pudieron incrustar los metadatos ID3: ${targetFile.name}"
+            )
         }
 
         try {
