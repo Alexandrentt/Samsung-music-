@@ -111,16 +111,27 @@ object YouTubeAudioDownloader {
                     "https://www.youtube.com/watch?v=$cleanId"
                 )
                 val streams = info.audioStreams
-                if (!streams.isNullOrEmpty()) {
-                    val best = streams
-                        .filter { it.isUrl }
-                        .maxByOrNull { it.averageBitrate }
-                        ?: streams.first()
+                // NewPipe puede devolver entradas cifradas/no resueltas. No usar streams.first()
+                // como respaldo: su campo content podría no ser una URL descargable.
+                val best = streams
+                    .orEmpty()
+                    .filter {
+                        it.isUrl &&
+                            it.content.startsWith("https://") &&
+                            (it.format?.mimeType?.startsWith("audio/") != false)
+                    }
+                    .maxByOrNull { it.averageBitrate }
+                if (best != null) {
                     val contentLength = best.itagItem?.contentLength ?: ItagItem.CONTENT_LENGTH_UNKNOWN
                     return@withContext ResolvedStream(
                         streamUrl = best.content,
                         mimeType = best.format?.mimeType ?: "audio/mp4",
                         contentLengthBytes = if (contentLength != ItagItem.CONTENT_LENGTH_UNKNOWN) contentLength else 0L
+                    )
+                } else {
+                    android.util.Log.w(
+                        "YouTubeAudioDownloader",
+                        "NewPipe no devolvió una URL directa de audio para $cleanId; se probarán las instancias de respaldo."
                     )
                 }
             } catch (e: Exception) {
