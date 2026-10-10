@@ -54,6 +54,8 @@ class SamsungMusicViewModel(application: Application) : AndroidViewModel(applica
     private val _isDownloading = MutableStateFlow(false)
     val isDownloading: StateFlow<Boolean> = _isDownloading.asStateFlow()
 
+    @Volatile private var isSyncingMissingSongs: Boolean = false
+
     private val _youtubeSearchQuery = MutableStateFlow("")
     val youtubeSearchQuery: StateFlow<String> = _youtubeSearchQuery.asStateFlow()
 
@@ -832,6 +834,89 @@ class SamsungMusicViewModel(application: Application) : AndroidViewModel(applica
 
     fun downloadAllPlaylists() {
         downloadFromUrl(MusicaEngine.PLAYLIST_URL_DEFAULT, autoEnrich = false)
+    }
+
+    /**
+     * Compara la playlist de referencia con los MP3 que realmente existen.
+     * Una fila en Room no cuenta como descargada si su archivo falta, está vacío
+     * o no es MP3. Tras informar qué falta, la descarga normal vuelve a comprobar
+     * cada ID para evitar duplicados y conserva los metadatos editados manualmente.
+     */
+    fun syncMissingSongs() {
+        if (_isDownloading.value || isSyncingMissingSongs) {
+            showFeedbackToast("Ya hay una comprobación o descarga en curso")
+            return
+        }
+        isSyncingMissingSongs = true
+        showFeedbackToast("Comprobando qué canciones faltan…")
+
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val playlistId = engine.extraerInfoUrl(MusicaEngine.PLAYLIST_URL_DEFAULT).first
+                    ?: throw IllegalStateException("No se pudo identificar la playlist")
+                val expected = engine.obtenerItemsPlaylist(playlistId)
+                if (expected.isEmpty()) {
+                    withContext(Dispatchers.Main) {
+                        showFeedbackToast("No se pudo leer la playlist. Comprueba tu conexión e inténtalo de nuevo.")
+                    }
+                    return@launch
+                }
+
+                // Recuperar primero los MP3 que existen en disco aunque falten en Room.
+                val recovered = engine.scanAndRecoverExistingSongs()
+                val before = repository.allSongs.firstOrNull().orEmpty()
+                for (found in recovered) {
+                    val current = before.firstOrNull { song ->
+                        song.id == found.id ||
+                            (!found.youtubeVideoId.isNullOrBlank() && song.youtubeVideoId == found.youtubeVideoId) ||
+                            song.filePath == found.filePath
+                    }
+                    when {
+                        current == null -> repository.insertSong(found)
+                        (!File(current.filePath).isFile ||
+                            (!File(current.filePath).extension.equals("mp3", ignoreCase = true) &&
+                                File(found.filePath).extension.equals("mp3", ignoreCase = true))) &&
+                            File(found.filePath).isFile -> repository.updateSong(
+                                current.copy(
+                                    filePath = found.filePath,
+                                    fileSizeBytes = found.fileSizeBytes,
+                                    durationMs = found.durationMs.takeIf { it > 0L } ?: current.durationMs,
+                                    lrcFilePath = found.lrcFilePath ?: current.lrcFilePath
+                                )
+                            )
+                    }
+                }
+
+                val currentSongs = repository.allSongs.firstOrNull().orEmpty()
+                val missing = expected.filter { item ->
+                    val cleanId = com.example.engine.YouTubeAudioDownloader.normalizeVideoId(item.videoId)
+                    val song = currentSongs.firstOrNull {
+                        it.youtubeVideoId == cleanId || it.id == "yt_$cleanId" || it.id == cleanId
+                    }
+                    val file = song?.let { File(it.filePath) }
+                    file == null || !file.isFile || file.length() <= 10_000L ||
+                        !file.extension.equals("mp3", ignoreCase = true)
+                }
+
+                withContext(Dispatchers.Main) {
+                    if (missing.isEmpty()) {
+                        showFeedbackToast("Biblioteca al día: las ${expected.size} canciones de la playlist tienen MP3 locales.")
+                    } else {
+                        val sample = missing.take(3).joinToString(", ") { it.title }
+                        val more = if (missing.size > 3) " y ${missing.size - 3} más" else ""
+                        showFeedbackToast("Faltan ${missing.size} canciones: $sample$more. Iniciando descargas…")
+                        downloadFromUrl(MusicaEngine.PLAYLIST_URL_DEFAULT, autoEnrich = false, showToast = false)
+                    }
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("SamsungMusic", "No se pudieron comprobar las canciones faltantes", e)
+                withContext(Dispatchers.Main) {
+                    showFeedbackToast("No se pudieron comprobar los faltantes. Inténtalo de nuevo.")
+                }
+            } finally {
+                isSyncingMissingSongs = false
+            }
+        }
     }
 
     fun setYouTubeSearchQuery(query: String) {
