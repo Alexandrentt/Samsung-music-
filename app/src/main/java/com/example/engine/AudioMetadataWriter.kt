@@ -60,7 +60,7 @@ object AudioMetadataWriter {
                 !outputFile.isFile || outputFile.length() <= 10_000L ||
                 !hasMp3Header(outputFile)
             ) {
-                Log.w(TAG, "No se pudieron escribir las etiquetas ID3: ${session.allLogsAsString}")
+                Log.w(TAG, "No se pudieron escribir las etiquetas ID3: ${session.failStackTrace ?: session.returnCode}")
                 return false
             }
 
@@ -150,17 +150,22 @@ object AudioMetadataWriter {
         }
     }
 
-    private fun hasMp3Header(file: File): Boolean = try {
-        file.inputStream().use { input ->
-            val header = ByteArray(3)
-            if (input.read(header) < 3) return false
-            (header[0] == 'I'.code.toByte() &&
-                header[1] == 'D'.code.toByte() &&
-                header[2] == '3'.code.toByte()) ||
-                (header[0] == 0xFF.toByte() && (header[1].toInt() and 0xE0) == 0xE0)
+    private fun hasMp3Header(file: File): Boolean {
+        return try {
+            file.inputStream().use { input ->
+                val header = ByteArray(3)
+                if (input.read(header) < 3) {
+                    false
+                } else {
+                    (header[0] == 'I'.code.toByte() &&
+                        header[1] == 'D'.code.toByte() &&
+                        header[2] == '3'.code.toByte()) ||
+                        (header[0] == 0xFF.toByte() && (header[1].toInt() and 0xE0) == 0xE0)
+                }
+            }
+        } catch (_: Exception) {
+            false
         }
-    } catch (_: Exception) {
-        false
     }
 
     private fun escape(value: String): String = value
