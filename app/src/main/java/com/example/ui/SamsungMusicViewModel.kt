@@ -392,7 +392,7 @@ class SamsungMusicViewModel(application: Application) : AndroidViewModel(applica
                         current == null -> repository.insertSong(song)
                         // La fila existe pero su archivo ya no está: repuntar al
                         // archivo recuperado sin pisar los metadatos enriquecidos.
-                        !File(current.filePath).isFile && File(song.filePath).isFile ->
+                        (!File(current.filePath).isFile || (File(current.filePath).extension.lowercase() != "mp3" && File(song.filePath).extension.equals("mp3", ignoreCase = true))) && File(song.filePath).isFile ->
                             repository.updateSong(
                                 current.copy(
                                     filePath = song.filePath,
@@ -429,7 +429,7 @@ class SamsungMusicViewModel(application: Application) : AndroidViewModel(applica
                             repository.insertSong(found)
                             added++
                         }
-                        !File(current.filePath).isFile && File(found.filePath).isFile -> {
+                        (!File(current.filePath).isFile || (File(current.filePath).extension.lowercase() != "mp3" && File(found.filePath).extension.equals("mp3", ignoreCase = true))) && File(found.filePath).isFile -> {
                             repository.updateSong(
                                 current.copy(
                                     filePath = found.filePath,
