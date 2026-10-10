@@ -496,6 +496,7 @@ class SamsungMusicViewModel(application: Application) : AndroidViewModel(applica
                         updated.lyricsLrc
                     }
                     com.example.engine.AudioMetadataWriter.writeTags(
+                        getApplication(),
                         audioFile,
                         updated.title,
                         updated.artist,
