@@ -9,6 +9,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bedtime
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
@@ -53,6 +54,7 @@ fun SamsungTopAppBar(
     onShowStats: () -> Unit,
     onCleanFolder: () -> Unit,
     onRescanSongs: () -> Unit,
+    onSyncMissingSongs: () -> Unit,
     onEnrichAll: () -> Unit,
     onExportCsv: () -> Unit
 ) {
@@ -104,6 +106,14 @@ fun SamsungTopAppBar(
                 }
 
                 // Acción directa: reescaneo visible sin tener que abrir el menú.
+                IconButton(onClick = onSyncMissingSongs) {
+                    Icon(
+                        imageVector = Icons.Default.Download,
+                        contentDescription = "Buscar y descargar canciones faltantes",
+                        tint = MaterialTheme.colorScheme.onBackground
+                    )
+                }
+
                 IconButton(onClick = onRescanSongs) {
                     Icon(
                         imageVector = Icons.Default.Refresh,
