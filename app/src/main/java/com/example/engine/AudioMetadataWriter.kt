@@ -68,8 +68,8 @@ object AudioMetadataWriter {
             backupCreated = true
 
             if (!outputFile.renameTo(audioFile)) {
-                backupFile.renameTo(audioFile)
-                backupCreated = false
+                val restored = backupFile.renameTo(audioFile)
+                backupCreated = !restored
                 Log.w(TAG, "No se pudo reemplazar el MP3 con la versión etiquetada")
                 return false
             }
@@ -85,7 +85,8 @@ object AudioMetadataWriter {
             return true
         } catch (e: Exception) {
             Log.w(TAG, "No se pudieron escribir los metadatos de ${audioFile.name}", e)
-            if (!audioFile.exists() && backupFile.exists()) {
+            if (backupFile.exists()) {
+                try { if (audioFile.exists()) audioFile.delete() } catch (_: Exception) {}
                 backupCreated = !backupFile.renameTo(audioFile)
             }
             return false
