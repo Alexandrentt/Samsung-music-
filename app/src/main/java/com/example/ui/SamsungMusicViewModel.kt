@@ -810,7 +810,7 @@ class SamsungMusicViewModel(application: Application) : AndroidViewModel(applica
             val alreadyInLibrary = rawSongs.value.firstOrNull {
                 it.youtubeVideoId == cleanId || it.id == "yt_$cleanId" || it.id == cleanId
             }
-            if (alreadyInLibrary != null && File(alreadyInLibrary.filePath).exists() && File(alreadyInLibrary.filePath).length() > 10_000L) {
+            if (alreadyInLibrary != null && File(alreadyInLibrary.filePath).exists() && File(alreadyInLibrary.filePath).length() > 10_000L && File(alreadyInLibrary.filePath).extension.equals("mp3", ignoreCase = true)) {
                 if (showToast) {
                     showFeedbackToast("Esta canción ya está en tu biblioteca")
                 }
@@ -872,7 +872,7 @@ class SamsungMusicViewModel(application: Application) : AndroidViewModel(applica
         val already = rawSongs.value.firstOrNull {
             it.youtubeVideoId == cleanId || it.id == "yt_$cleanId" || it.id == cleanId
         }
-        if (already != null && File(already.filePath).exists() && File(already.filePath).length() > 10_000L) {
+        if (already != null && File(already.filePath).exists() && File(already.filePath).length() > 10_000L && File(already.filePath).extension.equals("mp3", ignoreCase = true)) {
             showFeedbackToast("Ya tienes \"${item.title}\" en tu biblioteca")
             return
         }
