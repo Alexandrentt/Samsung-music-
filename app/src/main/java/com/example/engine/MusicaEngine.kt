@@ -1215,13 +1215,22 @@ class MusicaEngine(private val context: Context) {
                         )
                     }
                 } catch (e: Exception) {
+                    android.util.Log.e(
+                        "MusicaEngine",
+                        "Falló la canción ${item.title} (ID ${item.videoId}); se continúa con la siguiente.",
+                        e
+                    )
+                    val reason = (e.message ?: e.javaClass.simpleName)
+                        .replace(Regex("\\s+"), " ")
+                        .take(120)
                     onProgress(
                         DownloadProgress(
-                            step = "Sin audio disponible: ${item.title}",
+                            step = "Falló: ${item.title} — ${reason}",
                             percent = currentPercent,
                             currentSongTitle = item.title,
                             totalItems = total,
-                            currentItemIndex = index + 1
+                            currentItemIndex = index + 1,
+                            error = reason
                         )
                     )
                     continue
