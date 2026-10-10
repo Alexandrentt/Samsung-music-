@@ -9,6 +9,11 @@ on:
 permissions:
   contents: write
 
+# Evita que dos compilaciones publiquen el APK al mismo tiempo.
+concurrency:
+  group: build-apk-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -58,12 +63,38 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          BRANCH="${GITHUB_REF_NAME}"
           git add samsung-music*.apk
           if git diff --cached --quiet; then
             echo "APK sin cambios, no hay nada que commitear."
           else
-            git commit -m "build: actualizar APK release [skip ci]"
-            git push
+            PUSHED=false
+            for ATTEMPT in 1 2 3; do
+              if [ "$ATTEMPT" -gt 1 ]; then
+                git fetch origin "$BRANCH"
+                # Conservar el APK recién compilado, pero basarlo en la punta
+                # más reciente para evitar el rechazo non-fast-forward.
+                git reset --mixed "origin/$BRANCH"
+                git add samsung-music*.apk
+                if git diff --cached --quiet; then
+                  echo "El APK ya está actualizado en la rama remota."
+                  PUSHED=true
+                  break
+                fi
+              fi
+
+              git commit -m "build: actualizar APK release [skip ci]"
+              if git push origin "HEAD:$BRANCH"; then
+                PUSHED=true
+                break
+              fi
+              echo "Push rechazado; se reintentará sobre la última versión remota."
+            done
+
+            if [ "$PUSHED" != "true" ]; then
+              echo "No se pudo publicar el APK tras 3 intentos."
+              exit 1
+            fi
           fi
 
       - name: Delete in-progress release (if rerun)
