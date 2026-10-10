@@ -1,5 +1,6 @@
 package com.example.data
 
+import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.PrimaryKey
 
@@ -27,9 +28,9 @@ data class Song(
     val lastPlayedAt: Long? = null,
     val enrichmentScore: Int = 0,
     val dateAdded: Long = System.currentTimeMillis(),
-    val titleManuallyEdited: Boolean = false,
-    val artistManuallyEdited: Boolean = false,
-    val albumManuallyEdited: Boolean = false
+    @ColumnInfo(defaultValue = "0") val titleManuallyEdited: Boolean = false,
+    @ColumnInfo(defaultValue = "0") val artistManuallyEdited: Boolean = false,
+    @ColumnInfo(defaultValue = "0") val albumManuallyEdited: Boolean = false
 ) {
     val durationSeconds: Long get() = if (durationMs > 0) durationMs / 1000 else 180L
     val hasLyrics: Boolean get() = !lrcFilePath.isNullOrBlank() || !lyricsLrc.isNullOrBlank()
